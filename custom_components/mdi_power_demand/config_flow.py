@@ -113,6 +113,11 @@ def _entity_field(key: str, suggested_value: str | None) -> vol.Required:
     return vol.Required(key)
 
 
+def _current_config(entry: config_entries.ConfigEntry) -> dict[str, Any]:
+    """Merge config entry data and options."""
+    return {**entry.data, **entry.options}
+
+
 class MdiConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for MDI Power Demand."""
 
@@ -126,8 +131,11 @@ class MdiConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def async_get_options_flow(
         config_entry: config_entries.ConfigEntry,
     ) -> config_entries.OptionsFlow:
-        """Return the options flow."""
-        return MdiOptionsFlow(config_entry)
+        """Return the options flow.
+
+        Do not pass config_entry into OptionsFlow — HA 2025.12+ injects it.
+        """
+        return MdiOptionsFlow()
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         """First step: choose mode and general timing settings."""
@@ -224,16 +232,19 @@ class MdiConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class MdiOptionsFlow(config_entries.OptionsFlow):
-    """Options flow for MDI Power Demand."""
+    """Options flow for MDI Power Demand.
 
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        self.config_entry = config_entry
+    On HA 2025.12+/2026.x, ``self.config_entry`` is injected by the framework.
+    Do not assign it in ``__init__``.
+    """
+
+    def __init__(self) -> None:
         self._context: dict[str, Any] = {}
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
         """Edit general MDI configuration after install."""
         errors: dict[str, str] = {}
-        current = {**self.config_entry.data, **self.config_entry.options}
+        current = _current_config(self.config_entry)
 
         if user_input is not None:
             reset_day = int(user_input[CONF_RESET_DAY])
@@ -255,7 +266,7 @@ class MdiOptionsFlow(config_entries.OptionsFlow):
     async def async_step_signed(self, user_input: dict[str, Any] | None = None):
         """Edit the signed power source."""
         errors: dict[str, str] = {}
-        current = {**self.config_entry.data, **self.config_entry.options}
+        current = _current_config(self.config_entry)
         default_entity = current.get(CONF_SIGNED_POWER_ENTITY)
 
         if user_input is not None:
@@ -286,7 +297,7 @@ class MdiOptionsFlow(config_entries.OptionsFlow):
     async def async_step_split(self, user_input: dict[str, Any] | None = None):
         """Edit split import/export power sources."""
         errors: dict[str, str] = {}
-        current = {**self.config_entry.data, **self.config_entry.options}
+        current = _current_config(self.config_entry)
         default_in = current.get(CONF_IMPORT_POWER_ENTITY)
         default_out = current.get(CONF_EXPORT_POWER_ENTITY)
 

@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-07-20
+
+### Fixed
+
+- Configure/options flow 500 on Home Assistant 2026.x caused by assigning `config_entry` in OptionsFlow `__init__` (removed in HA 2025.12+)
+
 ## [0.1.6] - 2026-07-20
 
 ### Changed
@@ -65,6 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Full post-install reconfiguration via Options
 - Persistent MDI storage across Home Assistant restarts
 
+[0.1.7]: https://github.com/umarjamilpc/ha_power_mdi/releases/tag/v0.1.7
 [0.1.6]: https://github.com/umarjamilpc/ha_power_mdi/releases/tag/v0.1.6
 [0.1.5]: https://github.com/umarjamilpc/ha_power_mdi/releases/tag/v0.1.5
 [0.1.4]: https://github.com/umarjamilpc/ha_power_mdi/releases/tag/v0.1.4

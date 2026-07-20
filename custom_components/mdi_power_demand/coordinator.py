@@ -36,6 +36,7 @@ from .const import (
     POWER_UNIT_KW,
     POWER_UNIT_W,
     DOMAIN,
+    STORAGE_VERSION,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -156,8 +157,8 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         # Storage
         self._store = Store(
             hass,
-            storage_version=1,
-            key=f"{DOMAIN}:{entry.entry_id}",
+            STORAGE_VERSION,
+            f"{DOMAIN}:{entry.entry_id}",
         )
 
         # Initialize coordinator with placeholder state

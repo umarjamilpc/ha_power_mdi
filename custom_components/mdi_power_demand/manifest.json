@@ -1,7 +1,7 @@
 {
   "domain": "mdi_power_demand",
   "name": "MDI Power Demand",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "documentation": "https://github.com/umarjamilpc/ha_power_mdi",
   "issue_tracker": "https://github.com/umarjamilpc/ha_power_mdi/issues",
   "config_flow": true,

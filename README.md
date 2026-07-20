@@ -6,6 +6,8 @@
 
 Home Assistant custom integration for **Maximum Demand Indicator (MDI)** tracking from grid power sensors.
 
+![MDI Power Demand](icon.png)
+
 It mirrors typical utility meter behavior:
 
 - **Configurable demand blocks** (15, 30, or 60 minutes) aligned to clock boundaries

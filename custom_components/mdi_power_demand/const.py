@@ -29,6 +29,9 @@ CONF_BLOCK_DURATION_MINUTES = "block_duration_minutes"
 DEFAULT_BLOCK_DURATION_MINUTES = 30
 BLOCK_DURATION_OPTIONS = (15, 30, 60)
 
+# Fixed companion window for 1-minute demand entities
+ONE_MINUTE_BLOCK_SECONDS = 60
+
 # Entity id base used to build stable entity naming
 CONF_ENTITY_ID_BASE = "entity_id_base"
 

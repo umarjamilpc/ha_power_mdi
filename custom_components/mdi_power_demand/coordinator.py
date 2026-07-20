@@ -36,6 +36,7 @@ from .const import (
     DEFAULT_BLOCK_DURATION_MINUTES,
     MODE_SIGNED,
     MODE_SPLIT,
+    ONE_MINUTE_BLOCK_SECONDS,
     POWER_UNIT_AUTO,
     POWER_UNIT_KW,
     POWER_UNIT_W,
@@ -97,10 +98,14 @@ def _normalize_to_kw(power_value: float, unit: str, power_scaling_mode: str) -> 
 class MdiState:
     cycle_id: str
 
-    # Last completed block averages (kW) for each component
+    # Last completed configurable-duration block averages (kW)
     last_completed_import_kw: float | None = None
     last_completed_export_kw: float | None = None
     last_completed_combined_kw: float | None = None
+
+    # Last completed fixed 1-minute block averages (kW)
+    last_completed_1min_import_kw: float | None = None
+    last_completed_1min_export_kw: float | None = None
 
     # Current cycle (month based on reset_day) maxima (kW)
     mdi_import_max_kw: float = 0.0
@@ -134,7 +139,7 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         self.hass = hass
         self._reload_runtime_config()
 
-        # State accumulation for the active window
+        # State accumulation for the active configurable-duration window
         self._active_block_start: datetime | None = None
         self._active_block_end: datetime | None = None
         self._energy_import_kwh: float = 0.0
@@ -147,9 +152,21 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         self._last_combined_kw: float = 0.0
         self._block_valid: bool = False
 
+        # State accumulation for the always-on 1-minute companion window
+        self._1m_block_start: datetime | None = None
+        self._1m_block_end: datetime | None = None
+        self._1m_energy_import_kwh: float = 0.0
+        self._1m_energy_export_kwh: float = 0.0
+        self._1m_last_sample_time: datetime | None = None
+        self._1m_last_import_kw: float = 0.0
+        self._1m_last_export_kw: float = 0.0
+        self._1m_block_valid: bool = False
+
         # Scheduled point-in-time unsubscribers
         self._unsub_block_start: Callable[[], None] | None = None
         self._unsub_block_end: Callable[[], None] | None = None
+        self._unsub_1m_block_start: Callable[[], None] | None = None
+        self._unsub_1m_block_end: Callable[[], None] | None = None
         self._unsub_state_listener: Callable[[], None] | None = None
         self._unsub_reading_snapshot: Callable[[], None] | None = None
 
@@ -176,6 +193,8 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
                 last_completed_import_kw=stored.get("last_completed_import_kw"),
                 last_completed_export_kw=stored.get("last_completed_export_kw"),
                 last_completed_combined_kw=stored.get("last_completed_combined_kw"),
+                last_completed_1min_import_kw=stored.get("last_completed_1min_import_kw"),
+                last_completed_1min_export_kw=stored.get("last_completed_1min_export_kw"),
                 mdi_import_max_kw=float(stored.get("mdi_import_max_kw", 0.0)),
                 mdi_export_max_kw=float(stored.get("mdi_export_max_kw", 0.0)),
                 mdi_combined_max_kw=float(stored.get("mdi_combined_max_kw", 0.0)),
@@ -192,10 +211,20 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
             )
         else:
             # New cycle or first install: start fresh
-            self.data = MdiState(cycle_id=current_cycle_id)
+            self.data = MdiState(
+                cycle_id=current_cycle_id,
+                last_completed_1min_import_kw=(
+                    stored.get("last_completed_1min_import_kw") if stored else None
+                ),
+                last_completed_1min_export_kw=(
+                    stored.get("last_completed_1min_export_kw") if stored else None
+                ),
+            )
             await self._async_save_storage()
 
+        self._subscribe_power_entities()
         await self._schedule_next_block()
+        await self._schedule_next_1m_block()
         await self._maybe_schedule_or_take_snapshot(initial=True)
 
         # Ensure entities get an initial update
@@ -231,6 +260,12 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         if self._unsub_block_end:
             self._unsub_block_end()
             self._unsub_block_end = None
+        if self._unsub_1m_block_start:
+            self._unsub_1m_block_start()
+            self._unsub_1m_block_start = None
+        if self._unsub_1m_block_end:
+            self._unsub_1m_block_end()
+            self._unsub_1m_block_end = None
         if self._unsub_reading_snapshot:
             self._unsub_reading_snapshot()
             self._unsub_reading_snapshot = None
@@ -254,11 +289,28 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         self._last_combined_kw = 0.0
         self._block_valid = False
 
+        self._1m_block_start = None
+        self._1m_block_end = None
+        self._1m_energy_import_kwh = 0.0
+        self._1m_energy_export_kwh = 0.0
+        self._1m_last_sample_time = None
+        self._1m_last_import_kw = 0.0
+        self._1m_last_export_kw = 0.0
+        self._1m_block_valid = False
+
+        prev_1m_import = self.data.last_completed_1min_import_kw if self.data else None
+        prev_1m_export = self.data.last_completed_1min_export_kw if self.data else None
         current_cycle_id = self._compute_cycle_id(dt_now())
-        self.data = MdiState(cycle_id=current_cycle_id)
+        self.data = MdiState(
+            cycle_id=current_cycle_id,
+            last_completed_1min_import_kw=prev_1m_import,
+            last_completed_1min_export_kw=prev_1m_export,
+        )
 
         await self._async_save_storage()
+        self._subscribe_power_entities()
         await self._schedule_next_block()
+        await self._schedule_next_1m_block()
         await self._maybe_schedule_or_take_snapshot(initial=False)
         self.async_set_updated_data(self.data)
 
@@ -328,6 +380,21 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
             return current_start
         return current_start + timedelta(minutes=self._block_duration_minutes)
 
+    def _next_1m_window_start(self, local_dt: datetime) -> datetime:
+        """Get the next whole-minute boundary start."""
+        slot_start = local_dt.replace(second=0, microsecond=0)
+        if local_dt == slot_start:
+            return slot_start
+        return slot_start + timedelta(seconds=ONE_MINUTE_BLOCK_SECONDS)
+
+    def _preserve_1min_on_cycle_reset(self, new_cycle_id: str) -> None:
+        """Start a new monthly cycle while keeping live 1-minute MDI values."""
+        self.data = MdiState(
+            cycle_id=new_cycle_id,
+            last_completed_1min_import_kw=self.data.last_completed_1min_import_kw,
+            last_completed_1min_export_kw=self.data.last_completed_1min_export_kw,
+        )
+
     async def _schedule_next_block(self) -> None:
         """Schedule the next window start aligned to the configured block duration."""
         local_now = dt_now()
@@ -350,13 +417,34 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
             next_start + timedelta(seconds=self._block_duration_seconds),
         )
 
+    async def _schedule_next_1m_block(self) -> None:
+        """Schedule the next 1-minute demand window."""
+        local_now = dt_now()
+        next_start = self._next_1m_window_start(local_now)
+
+        if self._unsub_1m_block_start:
+            self._unsub_1m_block_start()
+        if self._unsub_1m_block_end:
+            self._unsub_1m_block_end()
+
+        self._unsub_1m_block_start = async_track_point_in_time(
+            self.hass,
+            self._handle_1m_block_start,
+            next_start,
+        )
+        self._unsub_1m_block_end = async_track_point_in_time(
+            self.hass,
+            self._handle_1m_block_end,
+            next_start + timedelta(seconds=ONE_MINUTE_BLOCK_SECONDS),
+        )
+
     async def _handle_block_start(self, run_at: datetime) -> None:
         """Start a new demand block exactly on boundary."""
         # Ensure cycle is correct at the moment we begin.
         local_now = dt_now()
         new_cycle_id = self._compute_cycle_id(local_now)
         if new_cycle_id != self.data.cycle_id:
-            self.data = MdiState(cycle_id=new_cycle_id)
+            self._preserve_1min_on_cycle_reset(new_cycle_id)
             await self._async_save_storage()
             await self._maybe_schedule_or_take_snapshot(initial=False)
 
@@ -367,10 +455,10 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         self._energy_export_kwh = 0.0
         self._energy_combined_kwh = 0.0
         self._last_sample_time = None
+        self._block_valid = False
 
-        # First sample at the block boundary, then sample on every entity update.
+        # First sample at the block boundary; entity updates continue sampling.
         await self._take_sample(run_at)
-        self._subscribe_power_entities()
 
         self.data.current_block_start = self._active_block_start
         self.data.current_block_end = self._active_block_end
@@ -378,21 +466,22 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
     async def _handle_block_end(self, run_at: datetime) -> None:
         """Finalize the active window and update monthly maxima."""
         if not self._active_block_start or not self._last_sample_time:
+            self._active_block_start = None
+            self._active_block_end = None
+            await self._chain_next_main_block(run_at)
             return
-
-        self._unsubscribe_power_entities()
 
         # Update cycle id at window end in case reset boundary is between.
         local_now = dt_now()
         new_cycle_id = self._compute_cycle_id(local_now)
         if new_cycle_id != self.data.cycle_id:
-            self.data = MdiState(cycle_id=new_cycle_id)
+            self._preserve_1min_on_cycle_reset(new_cycle_id)
             await self._async_save_storage()
             await self._maybe_schedule_or_take_snapshot(initial=False)
 
         # Add area until exact window end if valid
         if self._block_valid:
-            self._accumulate_since_last_sample(run_at)
+            self._accumulate_main_since_last_sample(run_at)
 
             avg_import = _interval_demand_kw(self._energy_import_kwh, self._block_duration_seconds)
             avg_export = _interval_demand_kw(self._energy_export_kwh, self._block_duration_seconds)
@@ -419,24 +508,24 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
             self.data.mdi_combined_max_kw = avg_combined
             changed = True
 
-        # Update current block averages (end of block)
+        # Clear in-progress main block
+        self._active_block_start = None
+        self._active_block_end = None
         self.data.current_block_start = None
         self.data.current_block_end = None
         self.data.current_import_block_avg_kw = None
         self.data.current_export_block_avg_kw = None
         self.data.current_combined_block_avg_kw = None
-        self.data.source_ok = self.data.source_ok
 
         # Persist if a new max peak was hit
         if changed:
             await self._async_save_storage()
 
         self.async_set_updated_data(self.data)
+        await self._chain_next_main_block(run_at)
 
-        # Schedule the next window pair (start/end chain)
-        next_start = run_at
-        # The current start/end callbacks are already firing (or have fired),
-        # so we avoid calling their unsubscribe handlers here.
+    async def _chain_next_main_block(self, next_start: datetime) -> None:
+        """Schedule the next configurable-duration block pair."""
         self._unsub_block_start = None
         self._unsub_block_end = None
 
@@ -449,6 +538,58 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
             self.hass,
             self._handle_block_end,
             next_start + timedelta(seconds=self._block_duration_seconds),
+        )
+
+    async def _handle_1m_block_start(self, run_at: datetime) -> None:
+        """Start a new fixed 1-minute demand block."""
+        self._1m_block_start = run_at
+        self._1m_block_end = run_at + timedelta(seconds=ONE_MINUTE_BLOCK_SECONDS)
+        self._1m_energy_import_kwh = 0.0
+        self._1m_energy_export_kwh = 0.0
+        self._1m_last_sample_time = None
+        self._1m_block_valid = False
+        await self._take_sample(run_at)
+
+    async def _handle_1m_block_end(self, run_at: datetime) -> None:
+        """Finalize the active 1-minute demand block."""
+        if not self._1m_block_start or not self._1m_last_sample_time:
+            self._1m_block_start = None
+            self._1m_block_end = None
+            await self._chain_next_1m_block(run_at)
+            return
+
+        if self._1m_block_valid:
+            self._accumulate_1m_since_last_sample(run_at)
+            avg_import = _interval_demand_kw(self._1m_energy_import_kwh, ONE_MINUTE_BLOCK_SECONDS)
+            avg_export = _interval_demand_kw(self._1m_energy_export_kwh, ONE_MINUTE_BLOCK_SECONDS)
+        else:
+            avg_import = None
+            avg_export = None
+
+        self.data.last_completed_1min_import_kw = avg_import
+        self.data.last_completed_1min_export_kw = avg_export
+
+        self._1m_block_start = None
+        self._1m_block_end = None
+
+        await self._async_save_storage()
+        self.async_set_updated_data(self.data)
+        await self._chain_next_1m_block(run_at)
+
+    async def _chain_next_1m_block(self, next_start: datetime) -> None:
+        """Schedule the next 1-minute block pair."""
+        self._unsub_1m_block_start = None
+        self._unsub_1m_block_end = None
+
+        self._unsub_1m_block_start = async_track_point_in_time(
+            self.hass,
+            self._handle_1m_block_start,
+            next_start,
+        )
+        self._unsub_1m_block_end = async_track_point_in_time(
+            self.hass,
+            self._handle_1m_block_end,
+            next_start + timedelta(seconds=ONE_MINUTE_BLOCK_SECONDS),
         )
 
     def _power_entity_ids(self) -> list[str]:
@@ -535,10 +676,14 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         combined_kw = import_kw + export_kw
         return import_kw, export_kw, combined_kw, True
 
-    def _accumulate_since_last_sample(self, run_at: datetime) -> None:
-        """Add interval energy (kWh) since the previous sample."""
+    def _accumulate_main_since_last_sample(self, run_at: datetime) -> None:
+        """Add main-block interval energy (kWh) since the previous sample."""
         if not self._block_valid or not self._last_sample_time:
             return
+        if not self._active_block_start or not self._active_block_end:
+            return
+        if run_at > self._active_block_end:
+            run_at = self._active_block_end
         elapsed = (run_at - self._last_sample_time).total_seconds()
         if elapsed <= 0:
             return
@@ -546,8 +691,22 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         self._energy_export_kwh += _power_to_energy_kwh(self._last_export_kw, elapsed)
         self._energy_combined_kwh += _power_to_energy_kwh(self._last_combined_kw, elapsed)
 
+    def _accumulate_1m_since_last_sample(self, run_at: datetime) -> None:
+        """Add 1-minute-block interval energy (kWh) since the previous sample."""
+        if not self._1m_block_valid or not self._1m_last_sample_time:
+            return
+        if not self._1m_block_start or not self._1m_block_end:
+            return
+        if run_at > self._1m_block_end:
+            run_at = self._1m_block_end
+        elapsed = (run_at - self._1m_last_sample_time).total_seconds()
+        if elapsed <= 0:
+            return
+        self._1m_energy_import_kwh += _power_to_energy_kwh(self._1m_last_import_kw, elapsed)
+        self._1m_energy_export_kwh += _power_to_energy_kwh(self._1m_last_export_kw, elapsed)
+
     def _update_current_block_averages(self, run_at: datetime) -> None:
-        """Update in-progress block averages after a sample."""
+        """Update in-progress main-block averages after a sample."""
         if not self._active_block_start or not self._block_valid:
             self.data.current_import_block_avg_kw = None
             self.data.current_export_block_avg_kw = None
@@ -567,32 +726,54 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         )
 
     async def _take_sample(self, run_at: datetime) -> bool:
-        """Read power and accumulate energy since the prior sample."""
-        if not self._active_block_start or not self._active_block_end:
-            return False
-        if run_at > self._active_block_end:
+        """Read power and accumulate energy for any active demand windows."""
+        main_active = bool(
+            self._active_block_start
+            and self._active_block_end
+            and run_at <= self._active_block_end
+        )
+        one_min_active = bool(
+            self._1m_block_start
+            and self._1m_block_end
+            and run_at <= self._1m_block_end
+        )
+        if not main_active and not one_min_active:
             return False
 
-        self._accumulate_since_last_sample(run_at)
+        if main_active:
+            self._accumulate_main_since_last_sample(run_at)
+        if one_min_active:
+            self._accumulate_1m_since_last_sample(run_at)
 
         import_kw, export_kw, combined_kw, source_ok = self._get_current_components_kw()
         if not source_ok:
-            self._block_valid = False
+            if main_active:
+                self._block_valid = False
+                self._last_sample_time = run_at
+                self.data.current_import_block_avg_kw = None
+                self.data.current_export_block_avg_kw = None
+                self.data.current_combined_block_avg_kw = None
+            if one_min_active:
+                self._1m_block_valid = False
+                self._1m_last_sample_time = run_at
             self.data.source_ok = False
-            self._last_sample_time = run_at
-            self.data.current_import_block_avg_kw = None
-            self.data.current_export_block_avg_kw = None
-            self.data.current_combined_block_avg_kw = None
             self.async_set_updated_data(self.data)
             return False
 
-        self._block_valid = True
-        self._last_sample_time = run_at
-        self._last_import_kw = float(import_kw or 0.0)
-        self._last_export_kw = float(export_kw or 0.0)
-        self._last_combined_kw = float(combined_kw or 0.0)
         self.data.source_ok = True
-        self._update_current_block_averages(run_at)
+        if main_active:
+            self._block_valid = True
+            self._last_sample_time = run_at
+            self._last_import_kw = float(import_kw or 0.0)
+            self._last_export_kw = float(export_kw or 0.0)
+            self._last_combined_kw = float(combined_kw or 0.0)
+            self._update_current_block_averages(run_at)
+        if one_min_active:
+            self._1m_block_valid = True
+            self._1m_last_sample_time = run_at
+            self._1m_last_import_kw = float(import_kw or 0.0)
+            self._1m_last_export_kw = float(export_kw or 0.0)
+
         self.async_set_updated_data(self.data)
         return True
 
@@ -651,6 +832,8 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
             "last_completed_import_kw": self.data.last_completed_import_kw,
             "last_completed_export_kw": self.data.last_completed_export_kw,
             "last_completed_combined_kw": self.data.last_completed_combined_kw,
+            "last_completed_1min_import_kw": self.data.last_completed_1min_import_kw,
+            "last_completed_1min_export_kw": self.data.last_completed_1min_export_kw,
             "mdi_import_max_kw": self.data.mdi_import_max_kw,
             "mdi_export_max_kw": self.data.mdi_export_max_kw,
             "mdi_combined_max_kw": self.data.mdi_combined_max_kw,

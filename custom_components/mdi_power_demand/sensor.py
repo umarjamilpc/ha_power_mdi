@@ -14,6 +14,8 @@ from .util import device_info
 SENSOR_DEFINITIONS: tuple[tuple[str, str, str], ...] = (
     ("last_completed_import_kw", "IMPORT-MDI", "import_mdi"),
     ("last_completed_export_kw", "EXPORT-MDI", "export_mdi"),
+    ("last_completed_1min_import_kw", "IMPORT-MDI-1MIN", "import_mdi_1min"),
+    ("last_completed_1min_export_kw", "EXPORT-MDI-1MIN", "export_mdi_1min"),
     ("mdi_import_max_kw", "IMPORT-MONTHLY-MDI", "import_monthly_mdi"),
     ("mdi_export_max_kw", "EXPORT-MONTHLY-MDI", "export_monthly_mdi"),
     ("mdi_import_at_reading_kw", "IMPORT-MONTHLY-MDI-AT-READING", "import_monthly_mdi_at_reading"),

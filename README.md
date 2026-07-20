@@ -135,8 +135,10 @@ All entities appear under device **MDI Power Demand**.
 
 | Entity ID | Name | What it shows |
 |-----------|------|---------------|
-| `sensor.import_mdi` | IMPORT-MDI | Last completed block **import** demand (kW) |
-| `sensor.export_mdi` | EXPORT-MDI | Last completed block **export** demand (kW) |
+| `sensor.import_mdi` | IMPORT-MDI | Last completed **configured-duration** import demand (kW) |
+| `sensor.export_mdi` | EXPORT-MDI | Last completed **configured-duration** export demand (kW) |
+| `sensor.import_mdi_1min` | IMPORT-MDI-1MIN | Last completed **1-minute** import demand (kW) |
+| `sensor.export_mdi_1min` | EXPORT-MDI-1MIN | Last completed **1-minute** export demand (kW) |
 | `sensor.import_monthly_mdi` | IMPORT-MONTHLY-MDI | **Peak import MDI** this billing cycle (kW) — your “MDI display” |
 | `sensor.export_monthly_mdi` | EXPORT-MONTHLY-MDI | **Peak export MDI** this billing cycle (kW) |
 | `sensor.import_monthly_mdi_at_reading` | IMPORT-MONTHLY-MDI-AT-READING | Frozen import MDI at last capture |
@@ -150,6 +152,7 @@ All power sensors use unit **kW**.
 | Question | Entity |
 |----------|--------|
 | What was the last demand block? | `sensor.import_mdi` |
+| What was the last 1-minute demand? | `sensor.import_mdi_1min` |
 | What is my peak MDI this month (live)? | `sensor.import_monthly_mdi` |
 | What was MDI when the reader came? | `sensor.import_monthly_mdi_at_reading` |
 
@@ -212,7 +215,9 @@ Blocks align to clock boundaries for your chosen duration:
 
 If you add the integration at **1:15 PM** with 30-min blocks, the first tracked block starts at **1:30 PM** (next boundary).
 
-`IMPORT-MDI` updates when each block completes.
+`IMPORT-MDI` updates when each configured block completes.
+
+Companion entities `IMPORT-MDI-1MIN` / `EXPORT-MDI-1MIN` always use **1-minute** blocks aligned to each clock minute (`:00`, `:01`, `:02`, …), independent of the configured block duration.
 
 ---
 
@@ -263,6 +268,8 @@ type: entities
 entities:
   - entity: sensor.import_mdi
   - entity: sensor.export_mdi
+  - entity: sensor.import_mdi_1min
+  - entity: sensor.export_mdi_1min
   - entity: sensor.import_monthly_mdi
   - entity: sensor.export_monthly_mdi
   - entity: sensor.import_monthly_mdi_at_reading

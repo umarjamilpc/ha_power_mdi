@@ -16,7 +16,7 @@ from .const import (
     DOMAIN,
 )
 
-MANIFEST_VERSION = "0.2.0"
+MANIFEST_VERSION = "0.2.1"
 
 
 def device_info(entry: ConfigEntry) -> DeviceInfo:

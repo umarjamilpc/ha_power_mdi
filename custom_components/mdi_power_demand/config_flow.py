@@ -8,7 +8,7 @@ from typing import Any
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import selector
 
 from .const import (
     CONF_AUTO_SNAPSHOT,
@@ -35,42 +35,85 @@ _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_READING_TIME = "18:00:00"
 
+_SENSOR_ENTITY_SELECTOR = selector.EntitySelector(
+    selector.EntitySelectorConfig(domain="sensor"),
+)
+
+
+def _reading_time_default(defaults: dict[str, Any]) -> str:
+    """Return a string default suitable for TimeSelector."""
+    reading_time_default = defaults.get(CONF_READING_TIME, DEFAULT_READING_TIME)
+    if isinstance(reading_time_default, str):
+        return reading_time_default
+    return parse_time(reading_time_default).strftime("%H:%M:%S")
+
 
 def _general_settings_schema(defaults: dict[str, Any]) -> vol.Schema:
-    """Build the shared general settings schema."""
-    reading_time_default = defaults.get(CONF_READING_TIME, DEFAULT_READING_TIME)
-    if not isinstance(reading_time_default, str):
-        reading_time_default = parse_time(reading_time_default).strftime("%H:%M:%S")
-
+    """Build the shared general settings schema using HA selectors."""
     return vol.Schema(
         {
-            vol.Required(CONF_NAME, default=str(defaults.get(CONF_NAME, "MDI Power Demand"))): cv.string,
-            vol.Required(CONF_MODE, default=str(defaults.get(CONF_MODE, MODE_SIGNED))): vol.In(
-                [MODE_SIGNED, MODE_SPLIT]
+            vol.Required(
+                CONF_NAME,
+                default=str(defaults.get(CONF_NAME, "MDI Power Demand")),
+            ): selector.TextSelector(),
+            vol.Required(
+                CONF_MODE,
+                default=str(defaults.get(CONF_MODE, MODE_SIGNED)),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[MODE_SIGNED, MODE_SPLIT],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                ),
             ),
             vol.Required(
                 CONF_POWER_UNIT,
                 default=str(defaults.get(CONF_POWER_UNIT, POWER_UNIT_AUTO)),
-            ): vol.In([POWER_UNIT_AUTO, POWER_UNIT_W, POWER_UNIT_KW]),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[POWER_UNIT_AUTO, POWER_UNIT_W, POWER_UNIT_KW],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                ),
+            ),
             vol.Required(
                 CONF_RESET_DAY,
                 default=int(defaults.get(CONF_RESET_DAY, 1)),
-            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=28)),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=1,
+                    max=28,
+                    mode=selector.NumberSelectorMode.BOX,
+                ),
+            ),
             vol.Required(
                 CONF_READING_DAY,
                 default=int(defaults.get(CONF_READING_DAY, 14)),
-            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=28)),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=1,
+                    max=28,
+                    mode=selector.NumberSelectorMode.BOX,
+                ),
+            ),
             vol.Required(
                 CONF_AUTO_SNAPSHOT,
                 default=bool(defaults.get(CONF_AUTO_SNAPSHOT, False)),
-            ): cv.boolean,
-            vol.Required(CONF_READING_TIME, default=reading_time_default): cv.time,
+            ): selector.BooleanSelector(),
+            vol.Required(
+                CONF_READING_TIME,
+                default=_reading_time_default(defaults),
+            ): selector.TimeSelector(),
         }
     )
 
 
-@config_entries.HANDLERS.register(DOMAIN)
-class MdiConfigFlow(config_entries.ConfigFlow):
+def _entity_field(key: str, suggested_value: str | None) -> vol.Required:
+    """Build an entity selector field with optional suggested value."""
+    if suggested_value:
+        return vol.Required(key, description={"suggested_value": suggested_value})
+    return vol.Required(key)
+
+
+class MdiConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for MDI Power Demand."""
 
     VERSION = 1
@@ -80,7 +123,9 @@ class MdiConfigFlow(config_entries.ConfigFlow):
 
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry: config_entries.ConfigEntry) -> config_entries.OptionsFlow:
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> config_entries.OptionsFlow:
         """Return the options flow."""
         return MdiOptionsFlow(config_entry)
 
@@ -133,8 +178,8 @@ class MdiConfigFlow(config_entries.ConfigFlow):
             step_id="signed",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_SIGNED_POWER_ENTITY): cv.entity_id,
-                    vol.Optional(CONF_ENTITY_ID_BASE): cv.string,
+                    vol.Required(CONF_SIGNED_POWER_ENTITY): _SENSOR_ENTITY_SELECTOR,
+                    vol.Optional(CONF_ENTITY_ID_BASE): selector.TextSelector(),
                 }
             ),
             errors=errors,
@@ -169,9 +214,9 @@ class MdiConfigFlow(config_entries.ConfigFlow):
             step_id="split",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_IMPORT_POWER_ENTITY): cv.entity_id,
-                    vol.Required(CONF_EXPORT_POWER_ENTITY): cv.entity_id,
-                    vol.Optional(CONF_ENTITY_ID_BASE): cv.string,
+                    vol.Required(CONF_IMPORT_POWER_ENTITY): _SENSOR_ENTITY_SELECTOR,
+                    vol.Required(CONF_EXPORT_POWER_ENTITY): _SENSOR_ENTITY_SELECTOR,
+                    vol.Optional(CONF_ENTITY_ID_BASE): selector.TextSelector(),
                 }
             ),
             errors=errors,
@@ -227,18 +272,12 @@ class MdiOptionsFlow(config_entries.OptionsFlow):
                 self._context.pop(CONF_EXPORT_POWER_ENTITY, None)
                 return self.async_create_entry(title="", data=normalize_config(self._context))
 
-        signed_field = (
-            vol.Required(CONF_SIGNED_POWER_ENTITY, default=default_entity)
-            if default_entity
-            else vol.Required(CONF_SIGNED_POWER_ENTITY)
-        )
-
         return self.async_show_form(
             step_id="signed",
             data_schema=vol.Schema(
                 {
-                    signed_field: cv.entity_id,
-                    vol.Optional(CONF_ENTITY_ID_BASE): cv.string,
+                    _entity_field(CONF_SIGNED_POWER_ENTITY, default_entity): _SENSOR_ENTITY_SELECTOR,
+                    vol.Optional(CONF_ENTITY_ID_BASE): selector.TextSelector(),
                 }
             ),
             errors=errors,
@@ -269,24 +308,13 @@ class MdiOptionsFlow(config_entries.OptionsFlow):
                 self._context.pop(CONF_SIGNED_POWER_ENTITY, None)
                 return self.async_create_entry(title="", data=normalize_config(self._context))
 
-        import_field = (
-            vol.Required(CONF_IMPORT_POWER_ENTITY, default=default_in)
-            if default_in
-            else vol.Required(CONF_IMPORT_POWER_ENTITY)
-        )
-        export_field = (
-            vol.Required(CONF_EXPORT_POWER_ENTITY, default=default_out)
-            if default_out
-            else vol.Required(CONF_EXPORT_POWER_ENTITY)
-        )
-
         return self.async_show_form(
             step_id="split",
             data_schema=vol.Schema(
                 {
-                    import_field: cv.entity_id,
-                    export_field: cv.entity_id,
-                    vol.Optional(CONF_ENTITY_ID_BASE): cv.string,
+                    _entity_field(CONF_IMPORT_POWER_ENTITY, default_in): _SENSOR_ENTITY_SELECTOR,
+                    _entity_field(CONF_EXPORT_POWER_ENTITY, default_out): _SENSOR_ENTITY_SELECTOR,
+                    vol.Optional(CONF_ENTITY_ID_BASE): selector.TextSelector(),
                 }
             ),
             errors=errors,

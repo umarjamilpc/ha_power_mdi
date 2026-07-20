@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-07-20
+
+### Changed
+
+- Distinct icons for every entity:
+  - IMPORT-MDI → `mdi:transmission-tower-import`
+  - EXPORT-MDI → `mdi:transmission-tower-export`
+  - IMPORT-MDI-1MIN → `mdi:timer`
+  - EXPORT-MDI-1MIN → `mdi:timer-outline`
+  - IMPORT-MONTHLY-MDI → `mdi:trending-up`
+  - EXPORT-MONTHLY-MDI → `mdi:trending-down`
+  - IMPORT-MONTHLY-MDI-AT-READING → `mdi:clipboard-text`
+  - EXPORT-MONTHLY-MDI-AT-READING → `mdi:clipboard-check`
+  - CAPTURE-MDI-READING → `mdi:camera-timer`
+
 ## [0.2.2] - 2026-07-20
 
 ### Fixed

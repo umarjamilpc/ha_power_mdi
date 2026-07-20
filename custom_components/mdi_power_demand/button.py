@@ -16,6 +16,7 @@ class MdiCaptureReadingButton(CoordinatorEntity[MdiCoordinator], ButtonEntity):
     _attr_has_entity_name = True
     _attr_name = "CAPTURE-MDI-READING"
     _attr_suggested_object_id = "capture_mdi_reading"
+    _attr_icon = "mdi:camera-timer"
 
     def __init__(self, coordinator: MdiCoordinator) -> None:
         super().__init__(coordinator)

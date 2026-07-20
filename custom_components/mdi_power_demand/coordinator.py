@@ -162,14 +162,14 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         )
 
         # Initialize coordinator with placeholder state
-        current_cycle_id = self._compute_cycle_id(dt_now(hass))
+        current_cycle_id = self._compute_cycle_id(dt_now())
         super().__init__(hass, _LOGGER, name=f"MDI Coordinator ({self._entity_id_base})", update_interval=None)
         self.data = MdiState(cycle_id=current_cycle_id)
 
     async def async_initialize(self) -> None:
         """Initialize coordinator, load state, subscribe, and schedule windows."""
         stored = await self._store.async_load()
-        current_cycle_id = self._compute_cycle_id(dt_now(self.hass))
+        current_cycle_id = self._compute_cycle_id(dt_now())
 
         if stored and stored.get("cycle_id") == current_cycle_id:
             self.data = MdiState(
@@ -260,7 +260,7 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         self._last_combined_kw = 0.0
         self._block_valid = False
 
-        current_cycle_id = self._compute_cycle_id(dt_now(self.hass))
+        current_cycle_id = self._compute_cycle_id(dt_now())
         self.data = MdiState(cycle_id=current_cycle_id)
 
         await self._async_save_storage()
@@ -352,7 +352,7 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
 
     async def _schedule_next_block(self) -> None:
         """Schedule the next window start (aligned to :00/:30)."""
-        local_now = dt_now(self.hass)
+        local_now = dt_now()
         next_start = self._next_window_start(local_now)
 
         # Cancel any existing window callbacks (shouldn't happen often)
@@ -375,7 +375,7 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
     async def _handle_block_start(self, run_at: datetime) -> None:
         """Start a new 30-minute window exactly on boundary."""
         # Ensure cycle is correct at the moment we begin.
-        local_now = dt_now(self.hass)
+        local_now = dt_now()
         new_cycle_id = self._compute_cycle_id(local_now)
         if new_cycle_id != self.data.cycle_id:
             self.data = MdiState(cycle_id=new_cycle_id)
@@ -412,7 +412,7 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
             return
 
         # Update cycle id at window end in case reset boundary is between.
-        local_now = dt_now(self.hass)
+        local_now = dt_now()
         new_cycle_id = self._compute_cycle_id(local_now)
         if new_cycle_id != self.data.cycle_id:
             self.data = MdiState(cycle_id=new_cycle_id)
@@ -541,7 +541,7 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
             self.data.source_ok = source_ok
             return
 
-        run_at = dt_now(self.hass)
+        run_at = dt_now()
 
         # If block already ended (time drift), ignore.
         if self._active_block_end and run_at > self._active_block_end:
@@ -599,7 +599,7 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         self.data.mdi_import_at_reading_kw = float(self.data.mdi_import_max_kw)
         self.data.mdi_export_at_reading_kw = float(self.data.mdi_export_max_kw)
         self.data.mdi_combined_at_reading_kw = float(self.data.mdi_combined_max_kw)
-        self.data.mdi_at_reading_timestamp = dt_now(self.hass)
+        self.data.mdi_at_reading_timestamp = dt_now()
 
         await self._async_save_storage()
         self.async_set_updated_data(self.data)
@@ -614,7 +614,7 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         if not self._auto_snapshot:
             return
 
-        current_local = dt_now(self.hass)
+        current_local = dt_now()
         cycle_start = self._cycle_start_datetime(current_local)
         reading_dt = self._reading_datetime_for_cycle(cycle_start)
 

@@ -34,7 +34,6 @@ from .const import (
     CONF_RESET_DAY,
     CONF_SIGNED_POWER_ENTITY,
     DEFAULT_BLOCK_DURATION_MINUTES,
-    MODE_SIGNED,
     MODE_SPLIT,
     ONE_MINUTE_BLOCK_SECONDS,
     POWER_UNIT_AUTO,
@@ -42,6 +41,7 @@ from .const import (
     POWER_UNIT_W,
     DOMAIN,
     STORAGE_VERSION,
+    is_combined_mode,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -594,7 +594,7 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
 
     def _power_entity_ids(self) -> list[str]:
         """Return the power entity IDs to listen to for instantaneous sampling."""
-        if self._mode == MODE_SIGNED:
+        if is_combined_mode(self._mode):
             if self._signed_power_entity:
                 return [self._signed_power_entity]
             return []
@@ -629,7 +629,7 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
 
     def _get_current_components_kw(self) -> tuple[float | None, float | None, float | None, bool]:
         """Read current sensor values and compute import/export/combined in kW."""
-        if self._mode == MODE_SIGNED:
+        if is_combined_mode(self._mode):
             entity_id = self._signed_power_entity
             if not entity_id:
                 return None, None, None, False

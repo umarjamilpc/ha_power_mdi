@@ -4,10 +4,10 @@
     "step": {
       "user": {
         "title": "MDI Power Demand configuration",
-        "description": "Configure a signed power sensor (import/export in one entity) or separate import/export sensors to compute MDI in kW.",
+        "description": "Choose Combine (one signed power sensor) or Split (separate import/export sensors).",
         "data": {
           "name": "Integration name",
-          "mode": "Power source mode",
+          "mode": "Power source",
           "power_unit": "Input power unit",
           "reset_day": "Monthly MDI reset day",
           "reading_day": "Capture reading day",
@@ -16,11 +16,11 @@
           "reading_time": "Capture reading time"
         }
       },
-      "signed": {
-        "title": "Signed power sensor",
-        "description": "Select a sensor that reports positive power for import and negative power for export.",
+      "combine": {
+        "title": "Combine power sensor",
+        "description": "Select one sensor that reports positive power for import and negative power for export.",
         "data": {
-          "signed_power_entity": "Signed power entity",
+          "signed_power_entity": "Combined power entity",
           "entity_id_base": "Entity ID base override"
         }
       },
@@ -36,17 +36,18 @@
     },
     "error": {
       "entity_not_found": "Entity not found",
-      "reading_day_before_reset_day": "Reading day must be on/after reset day"
+      "reading_day_before_reset_day": "Reading day must be on/after reset day",
+      "unknown": "Unknown error occurred"
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "MDI timing options",
-        "description": "Update mode, power unit, reset day, reading day/time without recreating the integration.",
+        "title": "MDI options",
+        "description": "Update power source (Combine or Split), sensors, reset day, reading day/time, and block duration.",
         "data": {
           "name": "Integration name",
-          "mode": "Power source mode",
+          "mode": "Power source",
           "power_unit": "Input power unit",
           "reset_day": "Monthly MDI reset day",
           "reading_day": "Capture reading day",
@@ -55,10 +56,11 @@
           "reading_time": "Capture reading time"
         }
       },
-      "signed": {
-        "title": "Signed power source",
+      "combine": {
+        "title": "Combine power source",
+        "description": "One sensor: positive = import, negative = export.",
         "data": {
-          "signed_power_entity": "Signed power entity",
+          "signed_power_entity": "Combined power entity",
           "entity_id_base": "Entity ID base override"
         }
       },
@@ -70,7 +72,11 @@
           "entity_id_base": "Entity ID base override"
         }
       }
+    },
+    "error": {
+      "entity_not_found": "Entity not found",
+      "reading_day_before_reset_day": "Reading day must be on/after reset day",
+      "unknown": "Unknown error occurred"
     }
   }
 }
-

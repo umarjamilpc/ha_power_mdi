@@ -11,12 +11,16 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from .const import (
     BLOCK_DURATION_OPTIONS,
     CONF_BLOCK_DURATION_MINUTES,
+    CONF_MODE,
     CONF_READING_TIME,
     DEFAULT_BLOCK_DURATION_MINUTES,
     DOMAIN,
+    MODE_COMBINED,
+    MODE_SIGNED,
+    MODE_SPLIT,
 )
 
-MANIFEST_VERSION = "0.2.3"
+MANIFEST_VERSION = "0.2.4"
 
 
 def device_info(entry: ConfigEntry) -> DeviceInfo:
@@ -61,4 +65,11 @@ def normalize_config(data: dict[str, Any]) -> dict[str, Any]:
         if duration not in BLOCK_DURATION_OPTIONS:
             duration = DEFAULT_BLOCK_DURATION_MINUTES
         result[CONF_BLOCK_DURATION_MINUTES] = duration
+    if CONF_MODE in result:
+        mode = str(result[CONF_MODE])
+        if mode == MODE_SIGNED:
+            mode = MODE_COMBINED
+        if mode not in {MODE_COMBINED, MODE_SPLIT}:
+            mode = MODE_COMBINED
+        result[CONF_MODE] = mode
     return result

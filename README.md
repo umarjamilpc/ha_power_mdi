@@ -74,7 +74,7 @@ Works with:
 ## Quick start
 
 1. Add the integration
-2. Choose **signed** mode (one power sensor) or **split** mode (separate import/export)
+2. Choose **Combine** mode (one signed power sensor) or **Split** mode (separate import/export)
 3. Select your power sensor(s)
 4. Leave defaults unless you know your billing cycle:
    - **Reset day:** `1` (monthly MDI cycle starts on the 1st)
@@ -90,7 +90,7 @@ Works with:
 | Setting | Description | Default |
 |---------|-------------|---------|
 | Integration name | Display name in HA | MDI Power Demand |
-| Power source mode | `signed` or `split` | signed |
+| Power source | `combined` (Combine) or `split` (Split) | combined |
 | Input power unit | `auto`, `W`, or `kW` | auto |
 | Monthly MDI reset day | Day of month the MDI peak resets (1–28) | 1 |
 | Capture reading day | Day to auto-snapshot MDI for billing (1–28) | 14 |
@@ -110,7 +110,7 @@ Change mode, sensors, block duration, reset day, reading day/time, and all other
 
 ## Power source modes
 
-### Signed mode (recommended for Refoss / single meter)
+### Combine mode (recommended for Refoss / single meter)
 
 One power sensor where:
 

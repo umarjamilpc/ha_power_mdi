@@ -25,11 +25,13 @@ from .const import (
     CONF_SIGNED_POWER_ENTITY,
     DEFAULT_BLOCK_DURATION_MINUTES,
     DOMAIN,
+    MODE_COMBINED,
     MODE_SIGNED,
     MODE_SPLIT,
     POWER_UNIT_AUTO,
     POWER_UNIT_KW,
     POWER_UNIT_W,
+    is_combined_mode,
 )
 from .util import normalize_config, parse_time
 
@@ -39,6 +41,16 @@ DEFAULT_READING_TIME = "18:00:00"
 
 _SENSOR_ENTITY_SELECTOR = selector.EntitySelector(
     selector.EntitySelectorConfig(domain="sensor"),
+)
+
+_MODE_SELECTOR = selector.SelectSelector(
+    selector.SelectSelectorConfig(
+        options=[
+            selector.SelectOptionDict(value=MODE_COMBINED, label="Combine"),
+            selector.SelectOptionDict(value=MODE_SPLIT, label="Split"),
+        ],
+        mode=selector.SelectSelectorMode.DROPDOWN,
+    ),
 )
 
 
@@ -62,6 +74,16 @@ def _block_duration_default(defaults: dict[str, Any]) -> str:
     return str(duration)
 
 
+def _mode_default(defaults: dict[str, Any]) -> str:
+    """Return Combine/Split mode default, migrating legacy signed → combined."""
+    mode = str(defaults.get(CONF_MODE, MODE_COMBINED))
+    if mode == MODE_SIGNED:
+        return MODE_COMBINED
+    if mode not in {MODE_COMBINED, MODE_SPLIT}:
+        return MODE_COMBINED
+    return mode
+
+
 def _general_settings_schema(defaults: dict[str, Any]) -> vol.Schema:
     """Build the shared general settings schema using HA selectors."""
     return vol.Schema(
@@ -72,13 +94,8 @@ def _general_settings_schema(defaults: dict[str, Any]) -> vol.Schema:
             ): selector.TextSelector(),
             vol.Required(
                 CONF_MODE,
-                default=str(defaults.get(CONF_MODE, MODE_SIGNED)),
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[MODE_SIGNED, MODE_SPLIT],
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                ),
-            ),
+                default=_mode_default(defaults),
+            ): _MODE_SELECTOR,
             vol.Required(
                 CONF_POWER_UNIT,
                 default=str(defaults.get(CONF_POWER_UNIT, POWER_UNIT_AUTO)),
@@ -130,9 +147,9 @@ def _general_settings_schema(defaults: dict[str, Any]) -> vol.Schema:
 
 
 def _entity_field(key: str, suggested_value: str | None) -> vol.Required:
-    """Build an entity selector field with optional suggested value."""
+    """Build an entity selector field with optional default."""
     if suggested_value:
-        return vol.Required(key, description={"suggested_value": suggested_value})
+        return vol.Required(key, default=suggested_value)
     return vol.Required(key)
 
 
@@ -165,48 +182,57 @@ class MdiConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            reset_day = int(user_input[CONF_RESET_DAY])
-            reading_day = int(user_input[CONF_READING_DAY])
-            if reading_day < reset_day:
-                errors[CONF_READING_DAY] = "reading_day_before_reset_day"
-            else:
-                self._context.update(normalize_config(user_input))
-                self._context[CONF_NAME] = user_input[CONF_NAME].strip()
+            try:
+                reset_day = int(user_input[CONF_RESET_DAY])
+                reading_day = int(user_input[CONF_READING_DAY])
+                if reading_day < reset_day:
+                    errors[CONF_READING_DAY] = "reading_day_before_reset_day"
+                else:
+                    self._context.update(normalize_config(user_input))
+                    self._context[CONF_NAME] = str(user_input[CONF_NAME]).strip()
 
-                if user_input[CONF_MODE] == MODE_SIGNED:
-                    return await self.async_step_signed()
-                return await self.async_step_split()
+                    if is_combined_mode(user_input[CONF_MODE]):
+                        return await self.async_step_combine()
+                    return await self.async_step_split()
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Error in MDI config user step")
+                errors["base"] = "unknown"
 
         return self.async_show_form(
             step_id="user",
-            data_schema=_general_settings_schema({}),
+            data_schema=_general_settings_schema(user_input or {}),
             errors=errors,
         )
 
-    async def async_step_signed(self, user_input: dict[str, Any] | None = None):
-        """Signed power mode: one sensor with positive import and negative export."""
+    async def async_step_combine(self, user_input: dict[str, Any] | None = None):
+        """Combine mode: one sensor with positive import and negative export."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            signed_power_entity = user_input[CONF_SIGNED_POWER_ENTITY]
-            if not _entity_exists(self.hass, signed_power_entity):
-                errors[CONF_SIGNED_POWER_ENTITY] = "entity_not_found"
-            else:
-                entity_id_base = user_input.get(CONF_ENTITY_ID_BASE) or _derive_entity_id_base(
-                    signed_power_entity
-                )
-                self._context[CONF_SIGNED_POWER_ENTITY] = signed_power_entity
-                self._context[CONF_ENTITY_ID_BASE] = entity_id_base
-                self._context.pop(CONF_IMPORT_POWER_ENTITY, None)
-                self._context.pop(CONF_EXPORT_POWER_ENTITY, None)
+            try:
+                signed_power_entity = user_input[CONF_SIGNED_POWER_ENTITY]
+                if not _entity_exists(self.hass, signed_power_entity):
+                    errors[CONF_SIGNED_POWER_ENTITY] = "entity_not_found"
+                else:
+                    entity_id_base = user_input.get(CONF_ENTITY_ID_BASE) or _derive_entity_id_base(
+                        signed_power_entity
+                    )
+                    self._context[CONF_MODE] = MODE_COMBINED
+                    self._context[CONF_SIGNED_POWER_ENTITY] = signed_power_entity
+                    self._context[CONF_ENTITY_ID_BASE] = entity_id_base
+                    self._context.pop(CONF_IMPORT_POWER_ENTITY, None)
+                    self._context.pop(CONF_EXPORT_POWER_ENTITY, None)
 
-                return self.async_create_entry(
-                    title=str(self._context[CONF_NAME]),
-                    data=normalize_config(self._context),
-                )
+                    return self.async_create_entry(
+                        title=str(self._context[CONF_NAME]),
+                        data=normalize_config(self._context),
+                    )
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Error in MDI config combine step")
+                errors["base"] = "unknown"
 
         return self.async_show_form(
-            step_id="signed",
+            step_id="combine",
             data_schema=vol.Schema(
                 {
                     vol.Required(CONF_SIGNED_POWER_ENTITY): _SENSOR_ENTITY_SELECTOR,
@@ -221,25 +247,30 @@ class MdiConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            import_entity = user_input[CONF_IMPORT_POWER_ENTITY]
-            export_entity = user_input[CONF_EXPORT_POWER_ENTITY]
-            if not _entity_exists(self.hass, import_entity):
-                errors[CONF_IMPORT_POWER_ENTITY] = "entity_not_found"
-            elif not _entity_exists(self.hass, export_entity):
-                errors[CONF_EXPORT_POWER_ENTITY] = "entity_not_found"
-            else:
-                entity_id_base = user_input.get(CONF_ENTITY_ID_BASE) or _derive_entity_id_base(
-                    import_entity
-                )
-                self._context[CONF_IMPORT_POWER_ENTITY] = import_entity
-                self._context[CONF_EXPORT_POWER_ENTITY] = export_entity
-                self._context[CONF_ENTITY_ID_BASE] = entity_id_base
-                self._context.pop(CONF_SIGNED_POWER_ENTITY, None)
+            try:
+                import_entity = user_input[CONF_IMPORT_POWER_ENTITY]
+                export_entity = user_input[CONF_EXPORT_POWER_ENTITY]
+                if not _entity_exists(self.hass, import_entity):
+                    errors[CONF_IMPORT_POWER_ENTITY] = "entity_not_found"
+                elif not _entity_exists(self.hass, export_entity):
+                    errors[CONF_EXPORT_POWER_ENTITY] = "entity_not_found"
+                else:
+                    entity_id_base = user_input.get(CONF_ENTITY_ID_BASE) or _derive_entity_id_base(
+                        import_entity
+                    )
+                    self._context[CONF_MODE] = MODE_SPLIT
+                    self._context[CONF_IMPORT_POWER_ENTITY] = import_entity
+                    self._context[CONF_EXPORT_POWER_ENTITY] = export_entity
+                    self._context[CONF_ENTITY_ID_BASE] = entity_id_base
+                    self._context.pop(CONF_SIGNED_POWER_ENTITY, None)
 
-                return self.async_create_entry(
-                    title=str(self._context[CONF_NAME]),
-                    data=normalize_config(self._context),
-                )
+                    return self.async_create_entry(
+                        title=str(self._context[CONF_NAME]),
+                        data=normalize_config(self._context),
+                    )
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Error in MDI config split step")
+                errors["base"] = "unknown"
 
         return self.async_show_form(
             step_id="split",
@@ -270,44 +301,53 @@ class MdiOptionsFlow(config_entries.OptionsFlow):
         current = _current_config(self.config_entry)
 
         if user_input is not None:
-            reset_day = int(user_input[CONF_RESET_DAY])
-            reading_day = int(user_input[CONF_READING_DAY])
-            if reading_day < reset_day:
-                errors[CONF_READING_DAY] = "reading_day_before_reset_day"
-            else:
-                self._context.update(normalize_config(user_input))
-                if user_input[CONF_MODE] == MODE_SIGNED:
-                    return await self.async_step_signed()
-                return await self.async_step_split()
+            try:
+                reset_day = int(user_input[CONF_RESET_DAY])
+                reading_day = int(user_input[CONF_READING_DAY])
+                if reading_day < reset_day:
+                    errors[CONF_READING_DAY] = "reading_day_before_reset_day"
+                else:
+                    self._context.update(normalize_config(user_input))
+                    if is_combined_mode(user_input[CONF_MODE]):
+                        return await self.async_step_combine()
+                    return await self.async_step_split()
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Error in MDI options init step")
+                errors["base"] = "unknown"
 
         return self.async_show_form(
             step_id="init",
-            data_schema=_general_settings_schema(current),
+            data_schema=_general_settings_schema(user_input or current),
             errors=errors,
         )
 
-    async def async_step_signed(self, user_input: dict[str, Any] | None = None):
-        """Edit the signed power source."""
+    async def async_step_combine(self, user_input: dict[str, Any] | None = None):
+        """Edit the combined power source."""
         errors: dict[str, str] = {}
         current = _current_config(self.config_entry)
         default_entity = current.get(CONF_SIGNED_POWER_ENTITY)
 
         if user_input is not None:
-            signed_power_entity = user_input[CONF_SIGNED_POWER_ENTITY]
-            if not _entity_exists(self.hass, signed_power_entity):
-                errors[CONF_SIGNED_POWER_ENTITY] = "entity_not_found"
-            else:
-                entity_id_base = user_input.get(CONF_ENTITY_ID_BASE) or _derive_entity_id_base(
-                    signed_power_entity
-                )
-                self._context[CONF_SIGNED_POWER_ENTITY] = signed_power_entity
-                self._context[CONF_ENTITY_ID_BASE] = entity_id_base
-                self._context.pop(CONF_IMPORT_POWER_ENTITY, None)
-                self._context.pop(CONF_EXPORT_POWER_ENTITY, None)
-                return self.async_create_entry(title="", data=normalize_config(self._context))
+            try:
+                signed_power_entity = user_input[CONF_SIGNED_POWER_ENTITY]
+                if not _entity_exists(self.hass, signed_power_entity):
+                    errors[CONF_SIGNED_POWER_ENTITY] = "entity_not_found"
+                else:
+                    entity_id_base = user_input.get(CONF_ENTITY_ID_BASE) or _derive_entity_id_base(
+                        signed_power_entity
+                    )
+                    self._context[CONF_MODE] = MODE_COMBINED
+                    self._context[CONF_SIGNED_POWER_ENTITY] = signed_power_entity
+                    self._context[CONF_ENTITY_ID_BASE] = entity_id_base
+                    self._context.pop(CONF_IMPORT_POWER_ENTITY, None)
+                    self._context.pop(CONF_EXPORT_POWER_ENTITY, None)
+                    return self.async_create_entry(title="", data=normalize_config(self._context))
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Error in MDI options combine step")
+                errors["base"] = "unknown"
 
         return self.async_show_form(
-            step_id="signed",
+            step_id="combine",
             data_schema=vol.Schema(
                 {
                     _entity_field(CONF_SIGNED_POWER_ENTITY, default_entity): _SENSOR_ENTITY_SELECTOR,
@@ -325,22 +365,27 @@ class MdiOptionsFlow(config_entries.OptionsFlow):
         default_out = current.get(CONF_EXPORT_POWER_ENTITY)
 
         if user_input is not None:
-            import_power_entity = user_input[CONF_IMPORT_POWER_ENTITY]
-            export_power_entity = user_input[CONF_EXPORT_POWER_ENTITY]
+            try:
+                import_power_entity = user_input[CONF_IMPORT_POWER_ENTITY]
+                export_power_entity = user_input[CONF_EXPORT_POWER_ENTITY]
 
-            if not _entity_exists(self.hass, import_power_entity):
-                errors[CONF_IMPORT_POWER_ENTITY] = "entity_not_found"
-            elif not _entity_exists(self.hass, export_power_entity):
-                errors[CONF_EXPORT_POWER_ENTITY] = "entity_not_found"
-            else:
-                entity_id_base = user_input.get(CONF_ENTITY_ID_BASE) or _derive_entity_id_base(
-                    import_power_entity
-                )
-                self._context[CONF_IMPORT_POWER_ENTITY] = import_power_entity
-                self._context[CONF_EXPORT_POWER_ENTITY] = export_power_entity
-                self._context[CONF_ENTITY_ID_BASE] = entity_id_base
-                self._context.pop(CONF_SIGNED_POWER_ENTITY, None)
-                return self.async_create_entry(title="", data=normalize_config(self._context))
+                if not _entity_exists(self.hass, import_power_entity):
+                    errors[CONF_IMPORT_POWER_ENTITY] = "entity_not_found"
+                elif not _entity_exists(self.hass, export_power_entity):
+                    errors[CONF_EXPORT_POWER_ENTITY] = "entity_not_found"
+                else:
+                    entity_id_base = user_input.get(CONF_ENTITY_ID_BASE) or _derive_entity_id_base(
+                        import_power_entity
+                    )
+                    self._context[CONF_MODE] = MODE_SPLIT
+                    self._context[CONF_IMPORT_POWER_ENTITY] = import_power_entity
+                    self._context[CONF_EXPORT_POWER_ENTITY] = export_power_entity
+                    self._context[CONF_ENTITY_ID_BASE] = entity_id_base
+                    self._context.pop(CONF_SIGNED_POWER_ENTITY, None)
+                    return self.async_create_entry(title="", data=normalize_config(self._context))
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Error in MDI options split step")
+                errors["base"] = "unknown"
 
         return self.async_show_form(
             step_id="split",

@@ -27,16 +27,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    async def _async_update_listener(updated_entry: ConfigEntry) -> None:
-        """Handle options updates without uninstalling."""
-        coordinator_obj: MdiCoordinator | None = hass.data.get(DOMAIN, {}).get(updated_entry.entry_id)
-        if coordinator_obj is None:
-            return
-        await coordinator_obj.async_handle_update(updated_entry)
-
-    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+    entry.async_on_unload(entry.add_update_listener(async_update_options))
     _LOGGER.debug("MDI Power Demand set up for %s", entry.entry_id)
     return True
+
+
+async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Handle options updates without uninstalling."""
+    coordinator_obj: MdiCoordinator | None = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if coordinator_obj is None:
+        return
+    await coordinator_obj.async_handle_update(entry)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

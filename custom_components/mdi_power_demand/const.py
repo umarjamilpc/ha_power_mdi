@@ -9,8 +9,11 @@ CONF_NAME = "name"
 CONF_MODE = "mode"
 CONF_POWER_UNIT = "power_unit"
 
-MODE_SIGNED = "signed"
+# Power source modes (UI: Combine / Split)
+MODE_COMBINED = "combined"
 MODE_SPLIT = "split"
+# Legacy alias kept for existing config entries
+MODE_SIGNED = "signed"
 
 CONF_SIGNED_POWER_ENTITY = "signed_power_entity"
 CONF_IMPORT_POWER_ENTITY = "import_power_entity"
@@ -42,3 +45,8 @@ COMP_COMBINED = "combined"
 
 # Storage
 STORAGE_VERSION = 1
+
+
+def is_combined_mode(mode: str | None) -> bool:
+    """Return True for combined/signed single-sensor mode."""
+    return mode in {MODE_COMBINED, MODE_SIGNED}

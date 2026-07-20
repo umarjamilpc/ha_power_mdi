@@ -24,7 +24,7 @@ from .const import (
     POWER_UNIT_W,
 )
 
-MANIFEST_VERSION = "0.2.7"
+MANIFEST_VERSION = "0.2.8"
 
 # Legacy option key removed from the UI (auto-detect source unit instead)
 _LEGACY_SOURCE_POWER_UNIT = "source_power_unit"

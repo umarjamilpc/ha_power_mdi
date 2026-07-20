@@ -39,6 +39,7 @@ class MdiValueSensor(CoordinatorEntity[MdiCoordinator], SensorEntity):
     _attr_has_entity_name = True
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = "measurement"
+    _attr_suggested_display_precision = 1
 
     def __init__(
         self,
@@ -65,7 +66,10 @@ class MdiValueSensor(CoordinatorEntity[MdiCoordinator], SensorEntity):
         value = getattr(self.coordinator.data, self._metric_key, None)
         if value is None:
             return None
-        return self.coordinator.to_display_power(float(value))
+        display = self.coordinator.to_display_power(float(value))
+        if display is None:
+            return None
+        return round(display, 1)
 
     @property
     def available(self) -> bool:

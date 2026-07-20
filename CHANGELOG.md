@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.8] - 2026-07-20
+
+### Changed
+
+- All MDI sensor values are rounded to **1 decimal place** (e.g. `3.9 kW`)
+
 ## [0.2.7] - 2026-07-20
 
 ### Changed

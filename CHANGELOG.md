@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.7] - 2026-07-20
+
+### Changed
+
+- Removed **Source power unit** from the config flow
+- Source unit is **auto-detected** from the entity `unit_of_measurement` (`W` / `kW`; missing → Watts)
+- Only **Display unit** (Watts / Kilowatts) remains configurable
+
 ## [0.2.6] - 2026-07-20
 
 ### Added

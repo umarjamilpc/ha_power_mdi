@@ -91,8 +91,7 @@ Works with:
 |---------|-------------|---------|
 | Integration name | Display name in HA | MDI Power Demand |
 | Power source | `combined` (Combine) or `split` (Split) | combined |
-| Source power unit | Unit of the source entity: `W` or `kW` | W |
-| Display unit | How MDI entities are shown: `W` or `kW` | kW |
+| Display unit | How MDI entities are shown: `W` or `kW` (source unit is auto-detected) | kW |
 | Monthly MDI reset day | Day of month the MDI peak resets (1–28) | 1 |
 | Capture reading day | Day to auto-snapshot MDI for billing (1–28) | 14 |
 | Capture reading time | Time for auto-snapshot | 18:00 |
@@ -146,14 +145,16 @@ All entities appear under device **MDI Power Demand**.
 | `sensor.export_monthly_mdi_at_reading` | EXPORT-MONTHLY-MDI-AT-READING | Frozen export MDI at last capture |
 | `button.capture_mdi_reading` | CAPTURE-MDI-READING | Press when meter reader arrives |
 
-All MDI sensors use your configured **display unit**. Source readings are converted using your configured **source power unit**:
+All MDI sensors use your configured **display unit**. The source entity unit is auto-detected from `unit_of_measurement`:
 
-| Source unit | Display unit | Example |
-|-------------|--------------|---------|
-| Watts | Kilowatts | `3892 W` → `3.892 kW` |
-| Kilowatts | Kilowatts | `3.892 kW` → `3.892 kW` |
-| Kilowatts | Watts | `3.892 kW` → `3892 W` |
-| Watts | Watts | `3892 W` → `3892 W` |
+| Source entity | Display unit | Example |
+|---------------|--------------|---------|
+| `3892 W` | Kilowatts | `3.892 kW` |
+| `3.892 kW` | Kilowatts | `3.892 kW` |
+| `3.892 kW` | Watts | `3892 W` |
+| `3892 W` | Watts | `3892 W` |
+
+If the source has no unit, it is treated as **Watts**.
 
 ### Which entity is which?
 

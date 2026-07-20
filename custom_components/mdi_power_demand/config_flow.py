@@ -23,10 +23,8 @@ from .const import (
     CONF_READING_TIME,
     CONF_RESET_DAY,
     CONF_SIGNED_POWER_ENTITY,
-    CONF_SOURCE_POWER_UNIT,
     DEFAULT_BLOCK_DURATION_MINUTES,
     DEFAULT_POWER_UNIT,
-    DEFAULT_SOURCE_POWER_UNIT,
     DOMAIN,
     MODE_COMBINED,
     MODE_SIGNED,
@@ -119,12 +117,6 @@ def _general_settings_schema(defaults: dict[str, Any]) -> vol.Schema:
                 CONF_MODE,
                 default=_mode_default(defaults),
             ): _MODE_SELECTOR,
-            vol.Required(
-                CONF_SOURCE_POWER_UNIT,
-                default=_unit_default(
-                    defaults, CONF_SOURCE_POWER_UNIT, DEFAULT_SOURCE_POWER_UNIT
-                ),
-            ): _POWER_UNIT_SELECTOR,
             vol.Required(
                 CONF_POWER_UNIT,
                 default=_unit_default(defaults, CONF_POWER_UNIT, DEFAULT_POWER_UNIT),

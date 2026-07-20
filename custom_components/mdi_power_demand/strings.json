@@ -8,7 +8,6 @@
         "data": {
           "name": "Integration name",
           "mode": "Power source",
-          "source_power_unit": "Source power unit",
           "power_unit": "Display unit",
           "reset_day": "Monthly MDI reset day",
           "reading_day": "Capture reading day",
@@ -49,7 +48,6 @@
         "data": {
           "name": "Integration name",
           "mode": "Power source",
-          "source_power_unit": "Source power unit",
           "power_unit": "Display unit",
           "reset_day": "Monthly MDI reset day",
           "reading_day": "Capture reading day",

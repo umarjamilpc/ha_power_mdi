@@ -12,7 +12,7 @@
           "reset_day": "Monthly MDI reset day",
           "reading_day": "Capture reading day",
           "auto_snapshot": "Enable automatic reading capture",
-          "sampling_interval_minutes": "Power sampling interval (minutes)",
+          "block_duration_minutes": "Demand block duration",
           "reading_time": "Capture reading time"
         }
       },
@@ -51,7 +51,7 @@
           "reset_day": "Monthly MDI reset day",
           "reading_day": "Capture reading day",
           "auto_snapshot": "Enable automatic reading capture",
-          "sampling_interval_minutes": "Power sampling interval (minutes)",
+          "block_duration_minutes": "Demand block duration",
           "reading_time": "Capture reading time"
         }
       },

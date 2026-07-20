@@ -24,9 +24,10 @@ CONF_RESET_DAY = "reset_day"
 CONF_READING_DAY = "reading_day"
 CONF_READING_TIME = "reading_time"
 CONF_AUTO_SNAPSHOT = "auto_snapshot"
-CONF_SAMPLING_INTERVAL_MINUTES = "sampling_interval_minutes"
+CONF_BLOCK_DURATION_MINUTES = "block_duration_minutes"
 
-DEFAULT_SAMPLING_INTERVAL_MINUTES = 1
+DEFAULT_BLOCK_DURATION_MINUTES = 30
+BLOCK_DURATION_OPTIONS = (15, 30, 60)
 
 # Entity id base used to build stable entity naming
 CONF_ENTITY_ID_BASE = "entity_id_base"
@@ -38,4 +39,3 @@ COMP_COMBINED = "combined"
 
 # Storage
 STORAGE_VERSION = 1
-

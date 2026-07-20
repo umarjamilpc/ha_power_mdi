@@ -8,9 +8,9 @@ Home Assistant custom integration for **Maximum Demand Indicator (MDI)** trackin
 
 It mirrors typical utility meter behavior:
 
-- **30-minute demand blocks** aligned to clock `:00` and `:30`
+- **Configurable demand blocks** (15, 30, or 60 minutes) aligned to clock boundaries
 - **Interval demand** using the utility formula: **kW = kWh ÷ hours**
-- **Monthly peak MDI** that only increases when a new 30-min block beats the previous peak
+- **Monthly peak MDI** that only increases when a new block beats the previous peak
 - **Reading snapshot** for comparing with your utility bill on meter-reading day
 
 Works with:
@@ -27,7 +27,8 @@ Works with:
 ## Features
 
 - Utility-style **interval demand** calculation (kWh-based, not raw power averaging)
-- Configurable **sampling interval** (1–30 minutes) inside each 30-min block
+- **Instantaneous sampling** on every power entity state update
+- Configurable **demand block duration** (15, 30, or 60 minutes)
 - **Import** and **export** MDI tracked separately
 - Monthly MDI resets on a configurable **reset day** (default: 1st)
 - **Capture reading** snapshot on a configurable day/time (default: 14th at 18:00)
@@ -78,8 +79,8 @@ Works with:
 4. Leave defaults unless you know your billing cycle:
    - **Reset day:** `1` (monthly MDI cycle starts on the 1st)
    - **Reading day:** `14` (meter reader visit day)
-   - **Sampling interval:** `1` minute
-5. Wait for the first **:00** or **:30** block to complete (~30 min max)
+   - **Block duration:** `30` minutes (match your utility; use 15 or 60 if needed)
+5. Wait for the first demand block to complete (up to your block duration)
 6. Check `sensor.import_mdi` and `sensor.import_monthly_mdi`
 
 ---
@@ -95,7 +96,7 @@ Works with:
 | Capture reading day | Day to auto-snapshot MDI for billing (1–28) | 14 |
 | Capture reading time | Time for auto-snapshot | 18:00 |
 | Auto snapshot | Automatically capture MDI on reading day/time | Off |
-| Power sampling interval | Minutes between power samples in each 30-min block (1–30) | 1 |
+| Demand block duration | Length of each demand interval (15, 30, or 60 min) | 30 |
 
 > **Reading day** must be on or after **reset day**.
 
@@ -103,7 +104,7 @@ Works with:
 
 **Settings → Devices & Services → MDI Power Demand → Configure**
 
-Change mode, sensors, reset day, reading day/time, sampling interval, and all other settings without uninstalling.
+Change mode, sensors, block duration, reset day, reading day/time, and all other settings without uninstalling.
 
 ---
 
@@ -134,8 +135,8 @@ All entities appear under device **MDI Power Demand**.
 
 | Entity ID | Name | What it shows |
 |-----------|------|---------------|
-| `sensor.import_mdi` | IMPORT-MDI | Last completed 30-min **import** demand (kW) |
-| `sensor.export_mdi` | EXPORT-MDI | Last completed 30-min **export** demand (kW) |
+| `sensor.import_mdi` | IMPORT-MDI | Last completed block **import** demand (kW) |
+| `sensor.export_mdi` | EXPORT-MDI | Last completed block **export** demand (kW) |
 | `sensor.import_monthly_mdi` | IMPORT-MONTHLY-MDI | **Peak import MDI** this billing cycle (kW) — your “MDI display” |
 | `sensor.export_monthly_mdi` | EXPORT-MONTHLY-MDI | **Peak export MDI** this billing cycle (kW) |
 | `sensor.import_monthly_mdi_at_reading` | IMPORT-MONTHLY-MDI-AT-READING | Frozen import MDI at last capture |
@@ -148,7 +149,7 @@ All power sensors use unit **kW**.
 
 | Question | Entity |
 |----------|--------|
-| What was the last 30-min block? | `sensor.import_mdi` |
+| What was the last demand block? | `sensor.import_mdi` |
 | What is my peak MDI this month (live)? | `sensor.import_monthly_mdi` |
 | What was MDI when the reader came? | `sensor.import_monthly_mdi_at_reading` |
 
@@ -156,28 +157,28 @@ All power sensors use unit **kW**.
 
 ## How it works
 
-### 1. Interval demand (every 30 minutes)
+### 1. Interval demand (each block)
 
-At the end of each block (`:00` or `:30`), the integration calculates:
+At the end of each demand block, the integration calculates:
 
 $$\text{Interval Demand (kW)} = \frac{\text{Energy used in interval (kWh)}}{\text{Interval time (hours)}}$$
 
-For a 30-minute block, interval time = **0.5 hours**.
+For a 30-minute block, interval time = **0.5 hours**. For 15 min use **0.25 h**; for 60 min use **1.0 h**.
 
 **Steps inside each block:**
 
-1. Sample instantaneous power every **N minutes** (your configured interval)
-2. Convert each sub-interval to energy: `kWh = kW × minutes ÷ 60`
-3. Sum import and export energy separately over 30 minutes
-4. Divide by **0.5 h** → interval demand in kW
+1. Sample power **instantaneously whenever the source entity updates**
+2. Convert each sub-interval to energy: `kWh = kW × seconds ÷ 3600`
+3. Sum import and export energy separately over the full block
+4. Divide by block duration in hours → interval demand in kW
 
-**Example:** 0.383 kWh import in 30 min → **0.383 ÷ 0.5 = 0.766 kW**
+**Example (30 min):** 0.383 kWh import → **0.383 ÷ 0.5 = 0.766 kW**
 
 This updates `sensor.import_mdi` / `sensor.export_mdi`.
 
 ### 2. Monthly peak MDI (provider-style)
 
-At the end of every 30-minute block, the integration compares that block’s kW average with the existing monthly peak:
+At the end of every demand block, the integration compares that block’s kW with the existing monthly peak:
 
 - If the new block is **higher** → monthly MDI is **overwritten** with the new value
 - If lower or equal → monthly MDI **stays unchanged**
@@ -199,30 +200,27 @@ The current monthly peak is copied to `sensor.import_monthly_mdi_at_reading` for
 
 ---
 
-## 30-minute block timing
+## Demand block timing
 
-Blocks always align to clock boundaries:
+Blocks align to clock boundaries for your chosen duration:
 
-| Block | Period |
-|-------|--------|
-| Block 1 | :00 → :30 |
-| Block 2 | :30 → :00 |
+| Duration | Boundaries | Example blocks |
+|----------|------------|----------------|
+| **15 min** | `:00`, `:15`, `:30`, `:45` | 1:00→1:15, 1:15→1:30 |
+| **30 min** | `:00`, `:30` | 1:00→1:30, 1:30→2:00 |
+| **60 min** | `:00` each hour | 1:00→2:00, 2:00→3:00 |
 
-If you add the integration at **1:15 PM**, the first tracked block starts at **1:30 PM** (next boundary).
+If you add the integration at **1:15 PM** with 30-min blocks, the first tracked block starts at **1:30 PM** (next boundary).
 
-`IMPORT-MDI` updates at **:00** and **:30** when each block completes.
+`IMPORT-MDI` updates when each block completes.
 
 ---
 
-## Sampling interval
+## Power sampling
 
-| Interval | Samples per 30-min block | When to use |
-|----------|--------------------------|-------------|
-| **1 min** | 30 | **Recommended** — matches typical utility CT meters and ~60s Refoss updates |
-| 5 min | 6 | Coarser; less accurate peaks |
-| 15 min | 2 | Very coarse |
+Power is sampled **on every state change** of your configured power entity (or import/export entities in split mode). Energy between updates is calculated using the elapsed time and the last known power reading — no fixed polling interval.
 
-The integration reads power at fixed intervals (not on every MQTT/state change), similar to utility meter sampling.
+This works well with meters like Refoss that publish roughly every 60 seconds. More frequent updates give finer energy integration within each block.
 
 ---
 
@@ -248,10 +246,10 @@ If your reader visits between **10:00 AM and 6:00 PM**:
 
 | Symptom | Cause / fix |
 |---------|-------------|
-| `import_mdi` shows `unknown` | No completed 30-min block yet — wait until next `:00` or `:30` |
+| `import_mdi` shows `unknown` | No completed demand block yet — wait for the next block boundary |
 | Monthly MDI stuck at `0.0` | No block completed since install, or only export (no import) |
 | Configure gives 500 error | Update to latest version (v0.1.7+) and restart HA |
-| Values differ slightly from utility meter | Check **sampling interval = 1 min**; small differences are normal due to sensor timing |
+| Values differ slightly from utility meter | Small differences are normal due to sensor update timing vs meter internal sampling |
 | After update, old long entity names remain | Delete orphaned old entities from **Settings → Entities** |
 
 ---

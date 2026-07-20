@@ -1,25 +1,28 @@
-"""Coordinator for time-synced 30-minute MDI tracking."""
+"""Coordinator for time-synced MDI demand block tracking."""
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.event import async_track_point_in_time
+from homeassistant.core import Event, HomeAssistant
+from homeassistant.helpers.event import async_track_point_in_time, async_track_state_change_event
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util.dt import now as dt_now
 
 from .util import parse_time
 from .const import (
+    BLOCK_DURATION_OPTIONS,
     COMP_COMBINED,
     COMP_EXPORT,
     COMP_IMPORT,
     CONF_AUTO_SNAPSHOT,
+    CONF_BLOCK_DURATION_MINUTES,
     CONF_ENTITY_ID_BASE,
     CONF_EXPORT_POWER_ENTITY,
     CONF_IMPORT_POWER_ENTITY,
@@ -29,9 +32,8 @@ from .const import (
     CONF_READING_DAY,
     CONF_READING_TIME,
     CONF_RESET_DAY,
-    CONF_SAMPLING_INTERVAL_MINUTES,
     CONF_SIGNED_POWER_ENTITY,
-    DEFAULT_SAMPLING_INTERVAL_MINUTES,
+    DEFAULT_BLOCK_DURATION_MINUTES,
     MODE_SIGNED,
     MODE_SPLIT,
     POWER_UNIT_AUTO,
@@ -42,9 +44,6 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-WINDOW_SECONDS = 30 * 60
-WINDOW_HOURS = WINDOW_SECONDS / 3600.0
 
 
 def _power_to_energy_kwh(power_kw: float, elapsed_seconds: float) -> float:
@@ -98,7 +97,7 @@ def _normalize_to_kw(power_value: float, unit: str, power_scaling_mode: str) -> 
 class MdiState:
     cycle_id: str
 
-    # Last completed 30-minute averages (kW) for each component
+    # Last completed block averages (kW) for each component
     last_completed_import_kw: float | None = None
     last_completed_export_kw: float | None = None
     last_completed_combined_kw: float | None = None
@@ -149,10 +148,10 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         self._block_valid: bool = False
 
         # Scheduled point-in-time unsubscribers
-        self._unsub_block_start: Any = None
-        self._unsub_block_end: Any = None
-        self._unsub_next_sample: Any = None
-        self._unsub_reading_snapshot: Any = None
+        self._unsub_block_start: Callable[[], None] | None = None
+        self._unsub_block_end: Callable[[], None] | None = None
+        self._unsub_state_listener: Callable[[], None] | None = None
+        self._unsub_reading_snapshot: Callable[[], None] | None = None
 
         # Storage
         self._store = Store(
@@ -203,15 +202,18 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         self.async_set_updated_data(self.data)
 
     def _reload_runtime_config(self) -> None:
-        """Load timing, source, and sampling settings from the config entry."""
+        """Load timing, source, and block settings from the config entry."""
         self._reset_day = int(self.config[CONF_RESET_DAY])
         self._reading_day = int(self.config[CONF_READING_DAY])
         self._reading_time = parse_time(self.config[CONF_READING_TIME])
         self._auto_snapshot = bool(self.config[CONF_AUTO_SNAPSHOT])
-        self._sampling_interval_minutes = int(
-            self.config.get(CONF_SAMPLING_INTERVAL_MINUTES, DEFAULT_SAMPLING_INTERVAL_MINUTES)
+        block_duration = int(
+            self.config.get(CONF_BLOCK_DURATION_MINUTES, DEFAULT_BLOCK_DURATION_MINUTES)
         )
-        self._sampling_interval_seconds = self._sampling_interval_minutes * 60
+        if block_duration not in BLOCK_DURATION_OPTIONS:
+            block_duration = DEFAULT_BLOCK_DURATION_MINUTES
+        self._block_duration_minutes = block_duration
+        self._block_duration_seconds = block_duration * 60
 
         self._mode = self.config[CONF_MODE]
         self._signed_power_entity = self.config.get(CONF_SIGNED_POWER_ENTITY)
@@ -222,7 +224,7 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
 
     async def async_shutdown(self) -> None:
         """Stop scheduled callbacks."""
-        self._cancel_next_sample()
+        self._unsubscribe_power_entities()
         if self._unsub_block_start:
             self._unsub_block_start()
             self._unsub_block_start = None
@@ -259,12 +261,6 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         await self._schedule_next_block()
         await self._maybe_schedule_or_take_snapshot(initial=False)
         self.async_set_updated_data(self.data)
-
-    def _cancel_next_sample(self) -> None:
-        """Cancel the next scheduled periodic sample, if any."""
-        if self._unsub_next_sample:
-            self._unsub_next_sample()
-            self._unsub_next_sample = None
 
     def _compute_cycle_id(self, local_dt: datetime) -> str:
         """Compute cycle id based on reset_day (defaults to day 1)."""
@@ -317,16 +313,23 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         )
         return reading
 
+    def _current_window_start(self, local_dt: datetime) -> datetime:
+        """Return the start of the demand block containing local_dt."""
+        midnight = local_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        elapsed_seconds = int((local_dt - midnight).total_seconds())
+        slot_seconds = self._block_duration_seconds
+        slot_index = elapsed_seconds // slot_seconds
+        return midnight + timedelta(seconds=slot_index * slot_seconds)
+
     def _next_window_start(self, local_dt: datetime) -> datetime:
-        """Get the next :00/:30 boundary start."""
-        minute_slot = 0 if local_dt.minute < 30 else 30
-        slot_start = local_dt.replace(minute=minute_slot, second=0, microsecond=0)
-        if local_dt == slot_start:
-            return slot_start
-        return slot_start + timedelta(minutes=30)
+        """Get the next demand block boundary start."""
+        current_start = self._current_window_start(local_dt)
+        if local_dt == current_start:
+            return current_start
+        return current_start + timedelta(minutes=self._block_duration_minutes)
 
     async def _schedule_next_block(self) -> None:
-        """Schedule the next window start (aligned to :00/:30)."""
+        """Schedule the next window start aligned to the configured block duration."""
         local_now = dt_now()
         next_start = self._next_window_start(local_now)
 
@@ -344,11 +347,11 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         self._unsub_block_end = async_track_point_in_time(
             self.hass,
             self._handle_block_end,
-            next_start + timedelta(seconds=WINDOW_SECONDS),
+            next_start + timedelta(seconds=self._block_duration_seconds),
         )
 
     async def _handle_block_start(self, run_at: datetime) -> None:
-        """Start a new 30-minute window exactly on boundary."""
+        """Start a new demand block exactly on boundary."""
         # Ensure cycle is correct at the moment we begin.
         local_now = dt_now()
         new_cycle_id = self._compute_cycle_id(local_now)
@@ -358,26 +361,26 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
             await self._maybe_schedule_or_take_snapshot(initial=False)
 
         self._active_block_start = run_at
-        self._active_block_end = run_at + timedelta(seconds=WINDOW_SECONDS)
+        self._active_block_end = run_at + timedelta(seconds=self._block_duration_seconds)
 
         self._energy_import_kwh = 0.0
         self._energy_export_kwh = 0.0
         self._energy_combined_kwh = 0.0
         self._last_sample_time = None
 
-        # First fixed-interval sample at the block boundary (utility-style).
+        # First sample at the block boundary, then sample on every entity update.
         await self._take_sample(run_at)
+        self._subscribe_power_entities()
 
         self.data.current_block_start = self._active_block_start
         self.data.current_block_end = self._active_block_end
-        self._schedule_next_sample(run_at)
 
     async def _handle_block_end(self, run_at: datetime) -> None:
         """Finalize the active window and update monthly maxima."""
         if not self._active_block_start or not self._last_sample_time:
             return
 
-        self._cancel_next_sample()
+        self._unsubscribe_power_entities()
 
         # Update cycle id at window end in case reset boundary is between.
         local_now = dt_now()
@@ -391,9 +394,9 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         if self._block_valid:
             self._accumulate_since_last_sample(run_at)
 
-            avg_import = _interval_demand_kw(self._energy_import_kwh, WINDOW_SECONDS)
-            avg_export = _interval_demand_kw(self._energy_export_kwh, WINDOW_SECONDS)
-            avg_combined = _interval_demand_kw(self._energy_combined_kwh, WINDOW_SECONDS)
+            avg_import = _interval_demand_kw(self._energy_import_kwh, self._block_duration_seconds)
+            avg_export = _interval_demand_kw(self._energy_export_kwh, self._block_duration_seconds)
+            avg_combined = _interval_demand_kw(self._energy_combined_kwh, self._block_duration_seconds)
         else:
             avg_import = None
             avg_export = None
@@ -445,8 +448,43 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         self._unsub_block_end = async_track_point_in_time(
             self.hass,
             self._handle_block_end,
-            next_start + timedelta(seconds=WINDOW_SECONDS),
+            next_start + timedelta(seconds=self._block_duration_seconds),
         )
+
+    def _power_entity_ids(self) -> list[str]:
+        """Return the power entity IDs to listen to for instantaneous sampling."""
+        if self._mode == MODE_SIGNED:
+            if self._signed_power_entity:
+                return [self._signed_power_entity]
+            return []
+        entity_ids: list[str] = []
+        if self._import_power_entity:
+            entity_ids.append(self._import_power_entity)
+        if self._export_power_entity:
+            entity_ids.append(self._export_power_entity)
+        return entity_ids
+
+    def _subscribe_power_entities(self) -> None:
+        """Sample power on every source entity state change."""
+        self._unsubscribe_power_entities()
+        entity_ids = self._power_entity_ids()
+        if not entity_ids:
+            return
+
+        async def _on_state_change(_event: Event) -> None:
+            await self._take_sample(dt_now())
+
+        self._unsub_state_listener = async_track_state_change_event(
+            self.hass,
+            entity_ids,
+            _on_state_change,
+        )
+
+    def _unsubscribe_power_entities(self) -> None:
+        """Stop listening to power entity updates."""
+        if self._unsub_state_listener:
+            self._unsub_state_listener()
+            self._unsub_state_listener = None
 
     def _get_current_components_kw(self) -> tuple[float | None, float | None, float | None, bool]:
         """Read current sensor values and compute import/export/combined in kW."""
@@ -529,7 +567,7 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         )
 
     async def _take_sample(self, run_at: datetime) -> bool:
-        """Read power at a fixed sampling instant and accumulate since the prior sample."""
+        """Read power and accumulate energy since the prior sample."""
         if not self._active_block_start or not self._active_block_end:
             return False
         if run_at > self._active_block_end:
@@ -557,27 +595,6 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         self._update_current_block_averages(run_at)
         self.async_set_updated_data(self.data)
         return True
-
-    def _schedule_next_sample(self, after: datetime) -> None:
-        """Schedule the next periodic sample inside the active 30-minute block."""
-        self._cancel_next_sample()
-        if not self._active_block_end:
-            return
-
-        next_sample = after + timedelta(minutes=self._sampling_interval_minutes)
-        if next_sample >= self._active_block_end:
-            return
-
-        self._unsub_next_sample = async_track_point_in_time(
-            self.hass,
-            self._handle_scheduled_sample,
-            next_sample,
-        )
-
-    async def _handle_scheduled_sample(self, run_at: datetime) -> None:
-        """Handle a periodic utility-style sample during an active block."""
-        if await self._take_sample(run_at):
-            self._schedule_next_sample(run_at)
 
     async def async_snapshot_now(self, reason: str) -> None:
         """Capture MDI values at the configured meter reading moment."""
@@ -653,4 +670,3 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
             return dt
         except (TypeError, ValueError):
             return None
-

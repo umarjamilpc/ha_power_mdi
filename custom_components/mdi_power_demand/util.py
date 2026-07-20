@@ -8,9 +8,15 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import CONF_READING_TIME, DOMAIN
+from .const import (
+    BLOCK_DURATION_OPTIONS,
+    CONF_BLOCK_DURATION_MINUTES,
+    CONF_READING_TIME,
+    DEFAULT_BLOCK_DURATION_MINUTES,
+    DOMAIN,
+)
 
-MANIFEST_VERSION = "0.1.9"
+MANIFEST_VERSION = "0.2.0"
 
 
 def device_info(entry: ConfigEntry) -> DeviceInfo:
@@ -50,4 +56,9 @@ def normalize_config(data: dict[str, Any]) -> dict[str, Any]:
     result = dict(data)
     if CONF_READING_TIME in result and result[CONF_READING_TIME] is not None:
         result[CONF_READING_TIME] = serialize_time(result[CONF_READING_TIME])
+    if CONF_BLOCK_DURATION_MINUTES in result:
+        duration = int(result[CONF_BLOCK_DURATION_MINUTES])
+        if duration not in BLOCK_DURATION_OPTIONS:
+            duration = DEFAULT_BLOCK_DURATION_MINUTES
+        result[CONF_BLOCK_DURATION_MINUTES] = duration
     return result

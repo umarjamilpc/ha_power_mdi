@@ -24,6 +24,9 @@ CONF_RESET_DAY = "reset_day"
 CONF_READING_DAY = "reading_day"
 CONF_READING_TIME = "reading_time"
 CONF_AUTO_SNAPSHOT = "auto_snapshot"
+CONF_SAMPLING_INTERVAL_MINUTES = "sampling_interval_minutes"
+
+DEFAULT_SAMPLING_INTERVAL_MINUTES = 1
 
 # Entity id base used to build stable entity naming
 CONF_ENTITY_ID_BASE = "entity_id_base"

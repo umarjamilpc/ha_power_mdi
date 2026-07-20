@@ -9,7 +9,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.event import async_track_point_in_time, async_track_state_change_event
+from homeassistant.helpers.event import async_track_point_in_time
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util.dt import now as dt_now
@@ -29,7 +29,9 @@ from .const import (
     CONF_READING_DAY,
     CONF_READING_TIME,
     CONF_RESET_DAY,
+    CONF_SAMPLING_INTERVAL_MINUTES,
     CONF_SIGNED_POWER_ENTITY,
+    DEFAULT_SAMPLING_INTERVAL_MINUTES,
     MODE_SIGNED,
     MODE_SPLIT,
     POWER_UNIT_AUTO,
@@ -117,19 +119,7 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         self.config = {**entry.data, **entry.options}
 
         self.hass = hass
-        self._reset_day: int = int(self.config[CONF_RESET_DAY])
-        self._reading_day: int = int(self.config[CONF_READING_DAY])
-        self._reading_time: time = parse_time(self.config[CONF_READING_TIME])
-        self._auto_snapshot: bool = bool(self.config[CONF_AUTO_SNAPSHOT])
-
-        self._mode: str = self.config[CONF_MODE]
-        self._signed_power_entity: str | None = self.config.get(CONF_SIGNED_POWER_ENTITY)
-        self._import_power_entity: str | None = self.config.get(CONF_IMPORT_POWER_ENTITY)
-        self._export_power_entity: str | None = self.config.get(CONF_EXPORT_POWER_ENTITY)
-
-        self._power_unit_mode: str = self.config[CONF_POWER_UNIT]
-
-        self._entity_id_base: str = self.config.get(CONF_ENTITY_ID_BASE, "mdi")
+        self._reload_runtime_config()
 
         # State accumulation for the active window
         self._active_block_start: datetime | None = None
@@ -144,14 +134,10 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         self._last_combined_kw: float = 0.0
         self._block_valid: bool = False
 
-        # Listener unsubscribers
-        self._unsub_signed: Any = None
-        self._unsub_import: Any = None
-        self._unsub_export: Any = None
-
         # Scheduled point-in-time unsubscribers
         self._unsub_block_start: Any = None
         self._unsub_block_end: Any = None
+        self._unsub_next_sample: Any = None
         self._unsub_reading_snapshot: Any = None
 
         # Storage
@@ -196,24 +182,33 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
             self.data = MdiState(cycle_id=current_cycle_id)
             await self._async_save_storage()
 
-        self._subscribe_sources()
         await self._schedule_next_block()
         await self._maybe_schedule_or_take_snapshot(initial=True)
 
         # Ensure entities get an initial update
         self.async_set_updated_data(self.data)
 
+    def _reload_runtime_config(self) -> None:
+        """Load timing, source, and sampling settings from the config entry."""
+        self._reset_day = int(self.config[CONF_RESET_DAY])
+        self._reading_day = int(self.config[CONF_READING_DAY])
+        self._reading_time = parse_time(self.config[CONF_READING_TIME])
+        self._auto_snapshot = bool(self.config[CONF_AUTO_SNAPSHOT])
+        self._sampling_interval_minutes = int(
+            self.config.get(CONF_SAMPLING_INTERVAL_MINUTES, DEFAULT_SAMPLING_INTERVAL_MINUTES)
+        )
+        self._sampling_interval_seconds = self._sampling_interval_minutes * 60
+
+        self._mode = self.config[CONF_MODE]
+        self._signed_power_entity = self.config.get(CONF_SIGNED_POWER_ENTITY)
+        self._import_power_entity = self.config.get(CONF_IMPORT_POWER_ENTITY)
+        self._export_power_entity = self.config.get(CONF_EXPORT_POWER_ENTITY)
+        self._power_unit_mode = self.config[CONF_POWER_UNIT]
+        self._entity_id_base = self.config.get(CONF_ENTITY_ID_BASE, "mdi")
+
     async def async_shutdown(self) -> None:
-        """Stop listeners and scheduled callbacks."""
-        if self._unsub_signed:
-            self._unsub_signed()
-            self._unsub_signed = None
-        if self._unsub_import:
-            self._unsub_import()
-            self._unsub_import = None
-        if self._unsub_export:
-            self._unsub_export()
-            self._unsub_export = None
+        """Stop scheduled callbacks."""
+        self._cancel_next_sample()
         if self._unsub_block_start:
             self._unsub_block_start()
             self._unsub_block_start = None
@@ -226,29 +221,12 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
 
     async def async_handle_update(self, entry: ConfigEntry) -> None:
         """Reconfigure the coordinator when options change."""
-        # Stop existing listeners/timers first
         await self.async_shutdown()
 
-        # Refresh entry/config
         self.entry = entry
         self.config = {**entry.data, **entry.options}
+        self._reload_runtime_config()
 
-        # Reset timing/source settings
-        self._reset_day = int(self.config[CONF_RESET_DAY])
-        self._reading_day = int(self.config[CONF_READING_DAY])
-        self._reading_time = parse_time(self.config[CONF_READING_TIME])
-        self._auto_snapshot = bool(self.config[CONF_AUTO_SNAPSHOT])
-
-        self._mode = self.config[CONF_MODE]
-        self._signed_power_entity = self.config.get(CONF_SIGNED_POWER_ENTITY)
-        self._import_power_entity = self.config.get(CONF_IMPORT_POWER_ENTITY)
-        self._export_power_entity = self.config.get(CONF_EXPORT_POWER_ENTITY)
-
-        self._power_unit_mode = self.config[CONF_POWER_UNIT]
-
-        self._entity_id_base = self.config.get(CONF_ENTITY_ID_BASE, "mdi")
-
-        # Reset runtime state + maxima to avoid mixing sources
         self._active_block_start = None
         self._active_block_end = None
         self._area_import_kw_seconds = 0.0
@@ -264,32 +242,15 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         self.data = MdiState(cycle_id=current_cycle_id)
 
         await self._async_save_storage()
-
-        # Resubscribe and restart timers
-        self._subscribe_sources()
         await self._schedule_next_block()
         await self._maybe_schedule_or_take_snapshot(initial=False)
         self.async_set_updated_data(self.data)
 
-    def _subscribe_sources(self) -> None:
-        """Subscribe to configured power sensor(s)."""
-        if self._mode == MODE_SIGNED:
-            if not self._signed_power_entity:
-                raise ValueError("Signed mode requires signed_power_entity")
-            self._unsub_signed = async_track_state_change_event(
-                self.hass, [self._signed_power_entity], self._handle_power_change
-            )
-        elif self._mode == MODE_SPLIT:
-            if not self._import_power_entity or not self._export_power_entity:
-                raise ValueError("Split mode requires import_power_entity and export_power_entity")
-            self._unsub_import = async_track_state_change_event(
-                self.hass, [self._import_power_entity], self._handle_power_change
-            )
-            self._unsub_export = async_track_state_change_event(
-                self.hass, [self._export_power_entity], self._handle_power_change
-            )
-        else:
-            raise ValueError(f"Unknown mode: {self._mode}")
+    def _cancel_next_sample(self) -> None:
+        """Cancel the next scheduled periodic sample, if any."""
+        if self._unsub_next_sample:
+            self._unsub_next_sample()
+            self._unsub_next_sample = None
 
     def _compute_cycle_id(self, local_dt: datetime) -> str:
         """Compute cycle id based on reset_day (defaults to day 1)."""
@@ -388,28 +349,21 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         self._area_import_kw_seconds = 0.0
         self._area_export_kw_seconds = 0.0
         self._area_combined_kw_seconds = 0.0
+        self._last_sample_time = None
 
-        # Initialize last sample exactly at boundary start
-        import_kw, export_kw, combined_kw, source_ok = self._get_current_components_kw()
-        self._last_import_kw = import_kw or 0.0
-        self._last_export_kw = export_kw or 0.0
-        self._last_combined_kw = combined_kw or 0.0
-
-        self._last_sample_time = run_at
-        self._block_valid = bool(source_ok)
+        # First fixed-interval sample at the block boundary (utility-style).
+        await self._take_sample(run_at)
 
         self.data.current_block_start = self._active_block_start
         self.data.current_block_end = self._active_block_end
-        self.data.current_import_block_avg_kw = None
-        self.data.current_export_block_avg_kw = None
-        self.data.current_combined_block_avg_kw = None
-        self.data.source_ok = source_ok
-        self.async_set_updated_data(self.data)
+        self._schedule_next_sample(run_at)
 
     async def _handle_block_end(self, run_at: datetime) -> None:
         """Finalize the active window and update monthly maxima."""
         if not self._active_block_start or not self._last_sample_time:
             return
+
+        self._cancel_next_sample()
 
         # Update cycle id at window end in case reset boundary is between.
         local_now = dt_now()
@@ -421,11 +375,7 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
 
         # Add area until exact window end if valid
         if self._block_valid:
-            elapsed = (run_at - self._last_sample_time).total_seconds()
-            if elapsed > 0:
-                self._area_import_kw_seconds += self._last_import_kw * elapsed
-                self._area_export_kw_seconds += self._last_export_kw * elapsed
-                self._area_combined_kw_seconds += self._last_combined_kw * elapsed
+            self._accumulate_since_last_sample(run_at)
 
             avg_import = self._area_import_kw_seconds / WINDOW_SECONDS
             avg_export = self._area_export_kw_seconds / WINDOW_SECONDS
@@ -533,57 +483,81 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         combined_kw = import_kw + export_kw
         return import_kw, export_kw, combined_kw, True
 
-    async def _handle_power_change(self, event) -> None:
-        """Handle any power sensor update while a window is active."""
-        if not self._active_block_start or not self._last_sample_time:
-            # Not in an active window yet: only mark source_ok if possible.
-            _, _, _, source_ok = self._get_current_components_kw()
-            self.data.source_ok = source_ok
+    def _accumulate_since_last_sample(self, run_at: datetime) -> None:
+        """Add time-weighted energy for the interval ending at run_at."""
+        if not self._block_valid or not self._last_sample_time:
             return
-
-        run_at = dt_now()
-
-        # If block already ended (time drift), ignore.
-        if self._active_block_end and run_at > self._active_block_end:
+        elapsed = (run_at - self._last_sample_time).total_seconds()
+        if elapsed <= 0:
             return
+        self._area_import_kw_seconds += self._last_import_kw * elapsed
+        self._area_export_kw_seconds += self._last_export_kw * elapsed
+        self._area_combined_kw_seconds += self._last_combined_kw * elapsed
+
+    def _update_current_block_averages(self, run_at: datetime) -> None:
+        """Update in-progress block averages after a sample."""
+        if not self._active_block_start or not self._block_valid:
+            self.data.current_import_block_avg_kw = None
+            self.data.current_export_block_avg_kw = None
+            self.data.current_combined_block_avg_kw = None
+            return
+        total_elapsed = (run_at - self._active_block_start).total_seconds()
+        if total_elapsed <= 0:
+            return
+        self.data.current_import_block_avg_kw = self._area_import_kw_seconds / total_elapsed
+        self.data.current_export_block_avg_kw = self._area_export_kw_seconds / total_elapsed
+        self.data.current_combined_block_avg_kw = self._area_combined_kw_seconds / total_elapsed
+
+    async def _take_sample(self, run_at: datetime) -> bool:
+        """Read power at a fixed sampling instant and accumulate since the prior sample."""
+        if not self._active_block_start or not self._active_block_end:
+            return False
+        if run_at > self._active_block_end:
+            return False
+
+        self._accumulate_since_last_sample(run_at)
 
         import_kw, export_kw, combined_kw, source_ok = self._get_current_components_kw()
-        # If sensors go invalid mid-block, we mark block invalid and stop MDI updates.
         if not source_ok:
             self._block_valid = False
             self.data.source_ok = False
-            # Do not accumulate area; just update time so we don't use stale duration later
             self._last_sample_time = run_at
-            return
+            self.data.current_import_block_avg_kw = None
+            self.data.current_export_block_avg_kw = None
+            self.data.current_combined_block_avg_kw = None
+            self.async_set_updated_data(self.data)
+            return False
 
-        # Accumulate using previous last values when the block is still valid.
-        if self._block_valid:
-            elapsed = (run_at - self._last_sample_time).total_seconds()
-            if elapsed > 0:
-                self._area_import_kw_seconds += self._last_import_kw * elapsed
-                self._area_export_kw_seconds += self._last_export_kw * elapsed
-                self._area_combined_kw_seconds += self._last_combined_kw * elapsed
-
-        # Update last sample values and time
+        self._block_valid = True
         self._last_sample_time = run_at
         self._last_import_kw = float(import_kw or 0.0)
         self._last_export_kw = float(export_kw or 0.0)
         self._last_combined_kw = float(combined_kw or 0.0)
         self.data.source_ok = True
-
-        # Compute best-effort current block average
-        if self._active_block_start:
-            total_elapsed = (run_at - self._active_block_start).total_seconds()
-            if total_elapsed > 0 and self._block_valid:
-                self.data.current_import_block_avg_kw = self._area_import_kw_seconds / total_elapsed
-                self.data.current_export_block_avg_kw = self._area_export_kw_seconds / total_elapsed
-                self.data.current_combined_block_avg_kw = self._area_combined_kw_seconds / total_elapsed
-            else:
-                self.data.current_import_block_avg_kw = None
-                self.data.current_export_block_avg_kw = None
-                self.data.current_combined_block_avg_kw = None
-
+        self._update_current_block_averages(run_at)
         self.async_set_updated_data(self.data)
+        return True
+
+    def _schedule_next_sample(self, after: datetime) -> None:
+        """Schedule the next periodic sample inside the active 30-minute block."""
+        self._cancel_next_sample()
+        if not self._active_block_end:
+            return
+
+        next_sample = after + timedelta(minutes=self._sampling_interval_minutes)
+        if next_sample >= self._active_block_end:
+            return
+
+        self._unsub_next_sample = async_track_point_in_time(
+            self.hass,
+            self._handle_scheduled_sample,
+            next_sample,
+        )
+
+    async def _handle_scheduled_sample(self, run_at: datetime) -> None:
+        """Handle a periodic utility-style sample during an active block."""
+        if await self._take_sample(run_at):
+            self._schedule_next_sample(run_at)
 
     async def async_snapshot_now(self, reason: str) -> None:
         """Capture MDI values at the configured meter reading moment."""

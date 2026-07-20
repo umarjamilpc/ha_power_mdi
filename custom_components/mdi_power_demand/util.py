@@ -10,7 +10,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import CONF_READING_TIME, DOMAIN
 
-MANIFEST_VERSION = "0.1.7"
+MANIFEST_VERSION = "0.1.8"
 
 
 def device_info(entry: ConfigEntry) -> DeviceInfo:

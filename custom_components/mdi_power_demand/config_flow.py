@@ -21,7 +21,9 @@ from .const import (
     CONF_READING_DAY,
     CONF_READING_TIME,
     CONF_RESET_DAY,
+    CONF_SAMPLING_INTERVAL_MINUTES,
     CONF_SIGNED_POWER_ENTITY,
+    DEFAULT_SAMPLING_INTERVAL_MINUTES,
     DOMAIN,
     MODE_SIGNED,
     MODE_SPLIT,
@@ -98,6 +100,20 @@ def _general_settings_schema(defaults: dict[str, Any]) -> vol.Schema:
                 CONF_AUTO_SNAPSHOT,
                 default=bool(defaults.get(CONF_AUTO_SNAPSHOT, False)),
             ): selector.BooleanSelector(),
+            vol.Required(
+                CONF_SAMPLING_INTERVAL_MINUTES,
+                default=int(
+                    defaults.get(CONF_SAMPLING_INTERVAL_MINUTES, DEFAULT_SAMPLING_INTERVAL_MINUTES)
+                ),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=1,
+                    max=30,
+                    step=1,
+                    mode=selector.NumberSelectorMode.BOX,
+                    unit_of_measurement="min",
+                ),
+            ),
             vol.Required(
                 CONF_READING_TIME,
                 default=_reading_time_default(defaults),

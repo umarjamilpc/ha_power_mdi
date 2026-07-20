@@ -9,7 +9,6 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers import selector
 
 from .const import (
     CONF_AUTO_SNAPSHOT,
@@ -37,29 +36,6 @@ _LOGGER = logging.getLogger(__name__)
 DEFAULT_READING_TIME = "18:00:00"
 
 
-def _mode_selector(default: str) -> selector.SelectSelector:
-    return selector.SelectSelector(
-        selector.SelectSelectorConfig(
-            options=[
-                selector.SelectOptionDict(value=MODE_SIGNED, label="Signed power (import + / export -)"),
-                selector.SelectOptionDict(value=MODE_SPLIT, label="Split import and export sensors"),
-            ],
-        )
-    )
-
-
-def _power_unit_selector(default: str) -> selector.SelectSelector:
-    return selector.SelectSelector(
-        selector.SelectSelectorConfig(
-            options=[
-                selector.SelectOptionDict(value=POWER_UNIT_AUTO, label="Auto detect"),
-                selector.SelectOptionDict(value=POWER_UNIT_W, label="Watts (W)"),
-                selector.SelectOptionDict(value=POWER_UNIT_KW, label="Kilowatts (kW)"),
-            ],
-        )
-    )
-
-
 def _general_settings_schema(defaults: dict[str, Any]) -> vol.Schema:
     """Build the shared general settings schema."""
     reading_time_default = defaults.get(CONF_READING_TIME, DEFAULT_READING_TIME)
@@ -69,13 +45,13 @@ def _general_settings_schema(defaults: dict[str, Any]) -> vol.Schema:
     return vol.Schema(
         {
             vol.Required(CONF_NAME, default=str(defaults.get(CONF_NAME, "MDI Power Demand"))): cv.string,
-            vol.Required(CONF_MODE, default=str(defaults.get(CONF_MODE, MODE_SIGNED))): _mode_selector(
-                str(defaults.get(CONF_MODE, MODE_SIGNED))
+            vol.Required(CONF_MODE, default=str(defaults.get(CONF_MODE, MODE_SIGNED))): vol.In(
+                [MODE_SIGNED, MODE_SPLIT]
             ),
             vol.Required(
                 CONF_POWER_UNIT,
                 default=str(defaults.get(CONF_POWER_UNIT, POWER_UNIT_AUTO)),
-            ): _power_unit_selector(str(defaults.get(CONF_POWER_UNIT, POWER_UNIT_AUTO))),
+            ): vol.In([POWER_UNIT_AUTO, POWER_UNIT_W, POWER_UNIT_KW]),
             vol.Required(
                 CONF_RESET_DAY,
                 default=int(defaults.get(CONF_RESET_DAY, 1)),
@@ -93,7 +69,8 @@ def _general_settings_schema(defaults: dict[str, Any]) -> vol.Schema:
     )
 
 
-class MdiConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+@config_entries.HANDLERS.register(DOMAIN)
+class MdiConfigFlow(config_entries.ConfigFlow):
     """Handle a config flow for MDI Power Demand."""
 
     VERSION = 1
@@ -156,9 +133,7 @@ class MdiConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="signed",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_SIGNED_POWER_ENTITY): selector.EntitySelector(
-                        selector.EntitySelectorConfig(domain=["sensor"])
-                    ),
+                    vol.Required(CONF_SIGNED_POWER_ENTITY): cv.entity_id,
                     vol.Optional(CONF_ENTITY_ID_BASE): cv.string,
                 }
             ),
@@ -194,12 +169,8 @@ class MdiConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="split",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_IMPORT_POWER_ENTITY): selector.EntitySelector(
-                        selector.EntitySelectorConfig(domain=["sensor"])
-                    ),
-                    vol.Required(CONF_EXPORT_POWER_ENTITY): selector.EntitySelector(
-                        selector.EntitySelectorConfig(domain=["sensor"])
-                    ),
+                    vol.Required(CONF_IMPORT_POWER_ENTITY): cv.entity_id,
+                    vol.Required(CONF_EXPORT_POWER_ENTITY): cv.entity_id,
                     vol.Optional(CONF_ENTITY_ID_BASE): cv.string,
                 }
             ),
@@ -256,23 +227,17 @@ class MdiOptionsFlow(config_entries.OptionsFlow):
                 self._context.pop(CONF_EXPORT_POWER_ENTITY, None)
                 return self.async_create_entry(title="", data=normalize_config(self._context))
 
-        entity_field: dict[vol.Marker, Any] = {
-            vol.Required(CONF_SIGNED_POWER_ENTITY): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain=["sensor"])
-            )
-        }
-        if default_entity:
-            entity_field = {
-                vol.Required(CONF_SIGNED_POWER_ENTITY, default=default_entity): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain=["sensor"])
-                )
-            }
+        signed_field = (
+            vol.Required(CONF_SIGNED_POWER_ENTITY, default=default_entity)
+            if default_entity
+            else vol.Required(CONF_SIGNED_POWER_ENTITY)
+        )
 
         return self.async_show_form(
             step_id="signed",
             data_schema=vol.Schema(
                 {
-                    **entity_field,
+                    signed_field: cv.entity_id,
                     vol.Optional(CONF_ENTITY_ID_BASE): cv.string,
                 }
             ),
@@ -304,35 +269,23 @@ class MdiOptionsFlow(config_entries.OptionsFlow):
                 self._context.pop(CONF_SIGNED_POWER_ENTITY, None)
                 return self.async_create_entry(title="", data=normalize_config(self._context))
 
-        import_field: dict[vol.Marker, Any] = {
-            vol.Required(CONF_IMPORT_POWER_ENTITY): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain=["sensor"])
-            )
-        }
-        export_field: dict[vol.Marker, Any] = {
-            vol.Required(CONF_EXPORT_POWER_ENTITY): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain=["sensor"])
-            )
-        }
-        if default_in:
-            import_field = {
-                vol.Required(CONF_IMPORT_POWER_ENTITY, default=default_in): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain=["sensor"])
-                )
-            }
-        if default_out:
-            export_field = {
-                vol.Required(CONF_EXPORT_POWER_ENTITY, default=default_out): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain=["sensor"])
-                )
-            }
+        import_field = (
+            vol.Required(CONF_IMPORT_POWER_ENTITY, default=default_in)
+            if default_in
+            else vol.Required(CONF_IMPORT_POWER_ENTITY)
+        )
+        export_field = (
+            vol.Required(CONF_EXPORT_POWER_ENTITY, default=default_out)
+            if default_out
+            else vol.Required(CONF_EXPORT_POWER_ENTITY)
+        )
 
         return self.async_show_form(
             step_id="split",
             data_schema=vol.Schema(
                 {
-                    **import_field,
-                    **export_field,
+                    import_field: cv.entity_id,
+                    export_field: cv.entity_id,
                     vol.Optional(CONF_ENTITY_ID_BASE): cv.string,
                 }
             ),

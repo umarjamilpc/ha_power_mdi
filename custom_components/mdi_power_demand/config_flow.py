@@ -23,8 +23,10 @@ from .const import (
     CONF_READING_TIME,
     CONF_RESET_DAY,
     CONF_SIGNED_POWER_ENTITY,
+    CONF_SOURCE_POWER_UNIT,
     DEFAULT_BLOCK_DURATION_MINUTES,
     DEFAULT_POWER_UNIT,
+    DEFAULT_SOURCE_POWER_UNIT,
     DOMAIN,
     MODE_COMBINED,
     MODE_SIGNED,
@@ -65,13 +67,13 @@ _POWER_UNIT_SELECTOR = selector.SelectSelector(
 )
 
 
-def _power_unit_default(defaults: dict[str, Any]) -> str:
-    """Return display power unit, migrating legacy auto → kW."""
-    value = str(defaults.get(CONF_POWER_UNIT, DEFAULT_POWER_UNIT))
+def _unit_default(defaults: dict[str, Any], key: str, default: str) -> str:
+    """Return a W/kW default, migrating legacy auto."""
+    value = str(defaults.get(key, default))
     if value == "auto":
-        return DEFAULT_POWER_UNIT
+        return default
     if value not in {POWER_UNIT_W, POWER_UNIT_KW}:
-        return DEFAULT_POWER_UNIT
+        return default
     return value
 
 
@@ -118,8 +120,14 @@ def _general_settings_schema(defaults: dict[str, Any]) -> vol.Schema:
                 default=_mode_default(defaults),
             ): _MODE_SELECTOR,
             vol.Required(
+                CONF_SOURCE_POWER_UNIT,
+                default=_unit_default(
+                    defaults, CONF_SOURCE_POWER_UNIT, DEFAULT_SOURCE_POWER_UNIT
+                ),
+            ): _POWER_UNIT_SELECTOR,
+            vol.Required(
                 CONF_POWER_UNIT,
-                default=_power_unit_default(defaults),
+                default=_unit_default(defaults, CONF_POWER_UNIT, DEFAULT_POWER_UNIT),
             ): _POWER_UNIT_SELECTOR,
             vol.Required(
                 CONF_RESET_DAY,

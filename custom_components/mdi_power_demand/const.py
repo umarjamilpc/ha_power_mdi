@@ -8,6 +8,7 @@ DOMAIN = "mdi_power_demand"
 CONF_NAME = "name"
 CONF_MODE = "mode"
 CONF_POWER_UNIT = "power_unit"
+CONF_SOURCE_POWER_UNIT = "source_power_unit"
 
 # Power source modes (UI: Combine / Split)
 MODE_COMBINED = "combined"
@@ -21,9 +22,10 @@ CONF_EXPORT_POWER_ENTITY = "export_power_entity"
 
 POWER_UNIT_W = "W"
 POWER_UNIT_KW = "kW"
-# Legacy value migrated to kW display
+# Legacy value migrated away
 POWER_UNIT_AUTO = "auto"
 DEFAULT_POWER_UNIT = POWER_UNIT_KW
+DEFAULT_SOURCE_POWER_UNIT = POWER_UNIT_W
 POWER_UNIT_OPTIONS = (POWER_UNIT_W, POWER_UNIT_KW)
 
 CONF_RESET_DAY = "reset_day"

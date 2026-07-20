@@ -33,13 +33,15 @@ from .const import (
     CONF_READING_TIME,
     CONF_RESET_DAY,
     CONF_SIGNED_POWER_ENTITY,
+    CONF_SOURCE_POWER_UNIT,
     DEFAULT_BLOCK_DURATION_MINUTES,
+    DEFAULT_POWER_UNIT,
+    DEFAULT_SOURCE_POWER_UNIT,
     MODE_SPLIT,
     ONE_MINUTE_BLOCK_SECONDS,
     POWER_UNIT_AUTO,
     POWER_UNIT_KW,
     POWER_UNIT_W,
-    DEFAULT_POWER_UNIT,
     DOMAIN,
     STORAGE_VERSION,
     is_combined_mode,
@@ -75,20 +77,31 @@ def _safe_float(value: Any) -> float | None:
     return f
 
 
-def _normalize_to_kw(power_value: float, unit: str) -> float | None:
-    """Convert a source power reading to kW using the entity's unit of measurement.
+def _normalize_unit(value: Any, default: str) -> str:
+    """Normalize a W/kW config value."""
+    unit = str(value if value is not None else default)
+    if unit == POWER_UNIT_AUTO:
+        return default
+    if unit not in {POWER_UNIT_W, POWER_UNIT_KW}:
+        return default
+    return unit
 
-    Watts → divide by 1000. Kilowatts → use as-is. Unknown → treat as Watts.
+
+def _source_to_kw(power_value: float, source_unit: str) -> float:
+    """Convert a source power reading to kW using the configured source unit.
+
+    Source Watts → ÷ 1000. Source Kilowatts → as-is.
     """
-    unit_clean = (unit or "").strip().lower()
-    if unit_clean in {"kw", "kilowatt", "kilowatts"}:
+    if source_unit == POWER_UNIT_KW:
         return power_value
-    # W / watt / watts / missing / unknown → Watts
     return power_value / 1000.0
 
 
 def _kw_to_display(power_kw: float, display_unit: str) -> float:
-    """Convert an internal kW value to the configured display unit."""
+    """Convert an internal kW value to the configured display unit.
+
+    Display Watts → × 1000. Display Kilowatts → as-is.
+    """
     if display_unit == POWER_UNIT_W:
         return power_kw * 1000.0
     return power_kw
@@ -248,11 +261,14 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         self._signed_power_entity = self.config.get(CONF_SIGNED_POWER_ENTITY)
         self._import_power_entity = self.config.get(CONF_IMPORT_POWER_ENTITY)
         self._export_power_entity = self.config.get(CONF_EXPORT_POWER_ENTITY)
-        self._power_unit_mode = self.config.get(CONF_POWER_UNIT, DEFAULT_POWER_UNIT)
-        if self._power_unit_mode == POWER_UNIT_AUTO:
-            self._power_unit_mode = DEFAULT_POWER_UNIT
-        if self._power_unit_mode not in {POWER_UNIT_W, POWER_UNIT_KW}:
-            self._power_unit_mode = DEFAULT_POWER_UNIT
+        self._source_power_unit = _normalize_unit(
+            self.config.get(CONF_SOURCE_POWER_UNIT, DEFAULT_SOURCE_POWER_UNIT),
+            DEFAULT_SOURCE_POWER_UNIT,
+        )
+        self._power_unit_mode = _normalize_unit(
+            self.config.get(CONF_POWER_UNIT, DEFAULT_POWER_UNIT),
+            DEFAULT_POWER_UNIT,
+        )
         self._entity_id_base = self.config.get(CONF_ENTITY_ID_BASE, "mdi")
 
     @property
@@ -654,10 +670,7 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
             raw = _safe_float(state.state)
             if raw is None:
                 return None, None, None, False
-            unit = state.attributes.get("unit_of_measurement")  # type: ignore[assignment]
-            kw = _normalize_to_kw(raw, unit=str(unit or ""))
-            if kw is None:
-                return None, None, None, False
+            kw = _source_to_kw(raw, self._source_power_unit)
             import_kw = kw if kw > 0 else 0.0
             export_kw = (-kw) if kw < 0 else 0.0
             combined_kw = import_kw + export_kw
@@ -678,13 +691,8 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         if raw_in is None or raw_out is None:
             return None, None, None, False
 
-        unit_in = s_in.attributes.get("unit_of_measurement")  # type: ignore[assignment]
-        unit_out = s_out.attributes.get("unit_of_measurement")  # type: ignore[assignment]
-
-        kw_in = _normalize_to_kw(raw_in, unit=str(unit_in or ""))
-        kw_out = _normalize_to_kw(raw_out, unit=str(unit_out or ""))
-        if kw_in is None or kw_out is None:
-            return None, None, None, False
+        kw_in = _source_to_kw(raw_in, self._source_power_unit)
+        kw_out = _source_to_kw(raw_out, self._source_power_unit)
 
         import_kw = kw_in if kw_in > 0 else 0.0
         export_kw = kw_out if kw_out > 0 else 0.0

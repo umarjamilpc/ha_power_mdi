@@ -14,8 +14,10 @@ from .const import (
     CONF_MODE,
     CONF_POWER_UNIT,
     CONF_READING_TIME,
+    CONF_SOURCE_POWER_UNIT,
     DEFAULT_BLOCK_DURATION_MINUTES,
     DEFAULT_POWER_UNIT,
+    DEFAULT_SOURCE_POWER_UNIT,
     DOMAIN,
     MODE_COMBINED,
     MODE_SIGNED,
@@ -24,7 +26,7 @@ from .const import (
     POWER_UNIT_W,
 )
 
-MANIFEST_VERSION = "0.2.5"
+MANIFEST_VERSION = "0.2.6"
 
 
 def device_info(entry: ConfigEntry) -> DeviceInfo:
@@ -83,4 +85,14 @@ def normalize_config(data: dict[str, Any]) -> dict[str, Any]:
         if unit not in {POWER_UNIT_W, POWER_UNIT_KW}:
             unit = DEFAULT_POWER_UNIT
         result[CONF_POWER_UNIT] = unit
+    if CONF_SOURCE_POWER_UNIT in result:
+        source_unit = str(result[CONF_SOURCE_POWER_UNIT])
+        if source_unit == "auto":
+            source_unit = DEFAULT_SOURCE_POWER_UNIT
+        if source_unit not in {POWER_UNIT_W, POWER_UNIT_KW}:
+            source_unit = DEFAULT_SOURCE_POWER_UNIT
+        result[CONF_SOURCE_POWER_UNIT] = source_unit
+    elif CONF_POWER_UNIT in result:
+        # Existing installs: default source to Watts (typical meter sensors)
+        result[CONF_SOURCE_POWER_UNIT] = DEFAULT_SOURCE_POWER_UNIT
     return result

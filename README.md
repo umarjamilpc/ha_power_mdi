@@ -1,10 +1,18 @@
 # MDI Power Demand
 
+[![Version](https://img.shields.io/github/v/release/umarjamilpc/ha_power_mdi?label=version)](https://github.com/umarjamilpc/ha_power_mdi/releases)
+[![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
+[![License: MIT](https://img.shields.io/github/license/umarjamilpc/ha_power_mdi)](LICENSE)
+
 Home Assistant custom integration for tracking **Maximum Demand Indicator (MDI)** from power sensors using **30-minute block averages** aligned to `:00` and `:30`.
 
 Works with:
 - **Signed power** (one sensor: positive = import, negative = export)
 - **Split power** (separate import and export sensors)
+
+[![Open your Home Assistant instance and start setting up a new integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=mdi_power_demand)
+
+> **Note:** Install the integration via HACS or manually first, then use the button above to open the setup dialog.
 
 ## Features
 
@@ -20,16 +28,18 @@ Works with:
 
 ### HACS (recommended)
 
-1. Add this repository as a custom HACS integration:
-   - Repository URL: `https://github.com/umarjamilpc/ha_power_mdi`
-2. Install **MDI Power Demand** from HACS
-3. Restart Home Assistant
-4. Go to **Settings → Devices & Services → Add Integration**
-5. Search for **MDI Power Demand**
+1. Open **HACS → Integrations → ⋮ → Custom repositories**
+2. Add repository URL: `https://github.com/umarjamilpc/ha_power_mdi`
+3. Select category: **Integration**
+4. Install **MDI Power Demand**
+5. Restart Home Assistant
+6. Click the **Add Integration** button at the top of this README, or go to **Settings → Devices & Services → Add Integration** and search for **MDI Power Demand**
 
 ### Manual
 
-Copy `custom_components/mdi_power_demand` into your Home Assistant `config/custom_components/` directory, then restart Home Assistant.
+1. Copy `custom_components/mdi_power_demand` into your Home Assistant `config/custom_components/` directory
+2. Restart Home Assistant
+3. Use the **Add Integration** button above or add the integration from **Settings → Devices & Services**
 
 ## Configuration
 
@@ -77,6 +87,18 @@ If your meter reader typically visits between **10:00 AM and 6:00 PM**, set:
 **Settings → Devices & Services → MDI Power Demand → Configure**
 
 You can change power source mode, sensors, reset day, reading day/time, and all other settings without uninstalling.
+
+## Versioning
+
+Versions follow [Semantic Versioning](https://semver.org/):
+
+- **Major** — breaking changes
+- **Minor** — new features, backward compatible
+- **Patch** — bug fixes
+
+The active version is defined in `custom_components/mdi_power_demand/manifest.json`. HACS reads this file and compares it with [GitHub Releases](https://github.com/umarjamilpc/ha_power_mdi/releases) to show the installed version and available updates.
+
+See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## License
 

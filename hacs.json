@@ -1,5 +1,8 @@
 {
   "name": "MDI Power Demand",
+  "content_in_root": false,
+  "filename": "mdi_power_demand",
+  "homeassistant": "2024.6.0",
   "render_readme": true,
-  "homeassistant": "2024.6.0"
+  "zip_release": false
 }

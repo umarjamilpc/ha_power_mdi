@@ -14,6 +14,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util.dt import now as dt_now
 
+from .util import parse_time
 from .const import (
     COMP_COMBINED,
     COMP_EXPORT,
@@ -117,7 +118,7 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         self.hass = hass
         self._reset_day: int = int(self.config[CONF_RESET_DAY])
         self._reading_day: int = int(self.config[CONF_READING_DAY])
-        self._reading_time: time = self.config[CONF_READING_TIME]
+        self._reading_time: time = parse_time(self.config[CONF_READING_TIME])
         self._auto_snapshot: bool = bool(self.config[CONF_AUTO_SNAPSHOT])
 
         self._mode: str = self.config[CONF_MODE]
@@ -234,7 +235,7 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         # Reset timing/source settings
         self._reset_day = int(self.config[CONF_RESET_DAY])
         self._reading_day = int(self.config[CONF_READING_DAY])
-        self._reading_time = self.config[CONF_READING_TIME]
+        self._reading_time = parse_time(self.config[CONF_READING_TIME])
         self._auto_snapshot = bool(self.config[CONF_AUTO_SNAPSHOT])
 
         self._mode = self.config[CONF_MODE]

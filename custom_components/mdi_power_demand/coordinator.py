@@ -39,6 +39,7 @@ from .const import (
     POWER_UNIT_AUTO,
     POWER_UNIT_KW,
     POWER_UNIT_W,
+    DEFAULT_POWER_UNIT,
     DOMAIN,
     STORAGE_VERSION,
     is_combined_mode,
@@ -74,24 +75,23 @@ def _safe_float(value: Any) -> float | None:
     return f
 
 
-def _normalize_to_kw(power_value: float, unit: str, power_scaling_mode: str) -> float | None:
-    """Normalize a power reading to kW.
+def _normalize_to_kw(power_value: float, unit: str) -> float | None:
+    """Convert a source power reading to kW using the entity's unit of measurement.
 
-    power_value is assumed to be in the unit described by unit/power_scaling_mode.
+    Watts → divide by 1000. Kilowatts → use as-is. Unknown → treat as Watts.
     """
     unit_clean = (unit or "").strip().lower()
-    if power_scaling_mode == POWER_UNIT_KW:
-        return power_value
-    if power_scaling_mode == POWER_UNIT_W:
-        return power_value / 1000.0
-    # AUTO
     if unit_clean in {"kw", "kilowatt", "kilowatts"}:
         return power_value
-    # Some sensors report "W" or "w"
-    if unit_clean in {"w", "watt", "watts"}:
-        return power_value / 1000.0
-    # Unknown unit: default to W behavior
+    # W / watt / watts / missing / unknown → Watts
     return power_value / 1000.0
+
+
+def _kw_to_display(power_kw: float, display_unit: str) -> float:
+    """Convert an internal kW value to the configured display unit."""
+    if display_unit == POWER_UNIT_W:
+        return power_kw * 1000.0
+    return power_kw
 
 
 @dataclass
@@ -248,8 +248,23 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         self._signed_power_entity = self.config.get(CONF_SIGNED_POWER_ENTITY)
         self._import_power_entity = self.config.get(CONF_IMPORT_POWER_ENTITY)
         self._export_power_entity = self.config.get(CONF_EXPORT_POWER_ENTITY)
-        self._power_unit_mode = self.config[CONF_POWER_UNIT]
+        self._power_unit_mode = self.config.get(CONF_POWER_UNIT, DEFAULT_POWER_UNIT)
+        if self._power_unit_mode == POWER_UNIT_AUTO:
+            self._power_unit_mode = DEFAULT_POWER_UNIT
+        if self._power_unit_mode not in {POWER_UNIT_W, POWER_UNIT_KW}:
+            self._power_unit_mode = DEFAULT_POWER_UNIT
         self._entity_id_base = self.config.get(CONF_ENTITY_ID_BASE, "mdi")
+
+    @property
+    def display_power_unit(self) -> str:
+        """Return configured display unit (W or kW)."""
+        return self._power_unit_mode
+
+    def to_display_power(self, power_kw: float | None) -> float | None:
+        """Convert an internal kW value to the configured display unit."""
+        if power_kw is None:
+            return None
+        return _kw_to_display(float(power_kw), self._power_unit_mode)
 
     async def async_shutdown(self) -> None:
         """Stop scheduled callbacks."""
@@ -640,7 +655,7 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
             if raw is None:
                 return None, None, None, False
             unit = state.attributes.get("unit_of_measurement")  # type: ignore[assignment]
-            kw = _normalize_to_kw(raw, unit=str(unit or ""), power_scaling_mode=self._power_unit_mode)
+            kw = _normalize_to_kw(raw, unit=str(unit or ""))
             if kw is None:
                 return None, None, None, False
             import_kw = kw if kw > 0 else 0.0
@@ -666,8 +681,8 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         unit_in = s_in.attributes.get("unit_of_measurement")  # type: ignore[assignment]
         unit_out = s_out.attributes.get("unit_of_measurement")  # type: ignore[assignment]
 
-        kw_in = _normalize_to_kw(raw_in, unit=str(unit_in or ""), power_scaling_mode=self._power_unit_mode)
-        kw_out = _normalize_to_kw(raw_out, unit=str(unit_out or ""), power_scaling_mode=self._power_unit_mode)
+        kw_in = _normalize_to_kw(raw_in, unit=str(unit_in or ""))
+        kw_out = _normalize_to_kw(raw_out, unit=str(unit_out or ""))
         if kw_in is None or kw_out is None:
             return None, None, None, False
 

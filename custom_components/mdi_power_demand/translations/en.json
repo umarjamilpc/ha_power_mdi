@@ -8,7 +8,7 @@
         "data": {
           "name": "Integration name",
           "mode": "Power source",
-          "power_unit": "Input power unit",
+          "power_unit": "Display unit",
           "reset_day": "Monthly MDI reset day",
           "reading_day": "Capture reading day",
           "auto_snapshot": "Enable automatic reading capture",
@@ -48,7 +48,7 @@
         "data": {
           "name": "Integration name",
           "mode": "Power source",
-          "power_unit": "Input power unit",
+          "power_unit": "Display unit",
           "reset_day": "Monthly MDI reset day",
           "reading_day": "Capture reading day",
           "auto_snapshot": "Enable automatic reading capture",

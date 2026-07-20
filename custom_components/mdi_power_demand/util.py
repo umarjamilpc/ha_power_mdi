@@ -12,15 +12,19 @@ from .const import (
     BLOCK_DURATION_OPTIONS,
     CONF_BLOCK_DURATION_MINUTES,
     CONF_MODE,
+    CONF_POWER_UNIT,
     CONF_READING_TIME,
     DEFAULT_BLOCK_DURATION_MINUTES,
+    DEFAULT_POWER_UNIT,
     DOMAIN,
     MODE_COMBINED,
     MODE_SIGNED,
     MODE_SPLIT,
+    POWER_UNIT_KW,
+    POWER_UNIT_W,
 )
 
-MANIFEST_VERSION = "0.2.4"
+MANIFEST_VERSION = "0.2.5"
 
 
 def device_info(entry: ConfigEntry) -> DeviceInfo:
@@ -72,4 +76,11 @@ def normalize_config(data: dict[str, Any]) -> dict[str, Any]:
         if mode not in {MODE_COMBINED, MODE_SPLIT}:
             mode = MODE_COMBINED
         result[CONF_MODE] = mode
+    if CONF_POWER_UNIT in result:
+        unit = str(result[CONF_POWER_UNIT])
+        if unit == "auto":
+            unit = DEFAULT_POWER_UNIT
+        if unit not in {POWER_UNIT_W, POWER_UNIT_KW}:
+            unit = DEFAULT_POWER_UNIT
+        result[CONF_POWER_UNIT] = unit
     return result

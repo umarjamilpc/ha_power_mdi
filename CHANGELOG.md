@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-07-20
+
+### Fixed
+
+- Incorrect huge kW values (e.g. `3892.44 kW`) when source power is in Watts — source unit is now read from the entity, then converted to the selected display unit
+
+### Changed
+
+- Removed **Auto** power unit option
+- Display unit is now **Watts** or **Kilowatts** only
+- Source entity unit is detected from `unit_of_measurement` (missing/unknown treated as Watts)
+- All MDI math stays in kW internally; sensors convert for display
+
 ## [0.2.4] - 2026-07-20
 
 ### Fixed

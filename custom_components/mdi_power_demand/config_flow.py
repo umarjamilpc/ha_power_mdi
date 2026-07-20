@@ -24,11 +24,11 @@ from .const import (
     CONF_RESET_DAY,
     CONF_SIGNED_POWER_ENTITY,
     DEFAULT_BLOCK_DURATION_MINUTES,
+    DEFAULT_POWER_UNIT,
     DOMAIN,
     MODE_COMBINED,
     MODE_SIGNED,
     MODE_SPLIT,
-    POWER_UNIT_AUTO,
     POWER_UNIT_KW,
     POWER_UNIT_W,
     is_combined_mode,
@@ -52,6 +52,27 @@ _MODE_SELECTOR = selector.SelectSelector(
         mode=selector.SelectSelectorMode.DROPDOWN,
     ),
 )
+
+
+_POWER_UNIT_SELECTOR = selector.SelectSelector(
+    selector.SelectSelectorConfig(
+        options=[
+            selector.SelectOptionDict(value=POWER_UNIT_W, label="Watts"),
+            selector.SelectOptionDict(value=POWER_UNIT_KW, label="Kilowatts"),
+        ],
+        mode=selector.SelectSelectorMode.DROPDOWN,
+    ),
+)
+
+
+def _power_unit_default(defaults: dict[str, Any]) -> str:
+    """Return display power unit, migrating legacy auto → kW."""
+    value = str(defaults.get(CONF_POWER_UNIT, DEFAULT_POWER_UNIT))
+    if value == "auto":
+        return DEFAULT_POWER_UNIT
+    if value not in {POWER_UNIT_W, POWER_UNIT_KW}:
+        return DEFAULT_POWER_UNIT
+    return value
 
 
 def _reading_time_default(defaults: dict[str, Any]) -> str:
@@ -98,13 +119,8 @@ def _general_settings_schema(defaults: dict[str, Any]) -> vol.Schema:
             ): _MODE_SELECTOR,
             vol.Required(
                 CONF_POWER_UNIT,
-                default=str(defaults.get(CONF_POWER_UNIT, POWER_UNIT_AUTO)),
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[POWER_UNIT_AUTO, POWER_UNIT_W, POWER_UNIT_KW],
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                ),
-            ),
+                default=_power_unit_default(defaults),
+            ): _POWER_UNIT_SELECTOR,
             vol.Required(
                 CONF_RESET_DAY,
                 default=int(defaults.get(CONF_RESET_DAY, 1)),

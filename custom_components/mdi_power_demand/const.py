@@ -19,9 +19,12 @@ CONF_SIGNED_POWER_ENTITY = "signed_power_entity"
 CONF_IMPORT_POWER_ENTITY = "import_power_entity"
 CONF_EXPORT_POWER_ENTITY = "export_power_entity"
 
-POWER_UNIT_AUTO = "auto"
 POWER_UNIT_W = "W"
 POWER_UNIT_KW = "kW"
+# Legacy value migrated to kW display
+POWER_UNIT_AUTO = "auto"
+DEFAULT_POWER_UNIT = POWER_UNIT_KW
+POWER_UNIT_OPTIONS = (POWER_UNIT_W, POWER_UNIT_KW)
 
 CONF_RESET_DAY = "reset_day"
 CONF_READING_DAY = "reading_day"

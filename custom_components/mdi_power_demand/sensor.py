@@ -38,7 +38,6 @@ class MdiValueSensor(CoordinatorEntity[MdiCoordinator], SensorEntity):
 
     _attr_has_entity_name = True
     _attr_device_class = SensorDeviceClass.POWER
-    _attr_native_unit_of_measurement = "kW"
     _attr_state_class = "measurement"
 
     def __init__(
@@ -58,11 +57,15 @@ class MdiValueSensor(CoordinatorEntity[MdiCoordinator], SensorEntity):
         self._attr_device_info = device_info(coordinator.entry)
 
     @property
+    def native_unit_of_measurement(self) -> str:
+        return self.coordinator.display_power_unit
+
+    @property
     def native_value(self) -> float | None:
         value = getattr(self.coordinator.data, self._metric_key, None)
         if value is None:
             return None
-        return float(value)
+        return self.coordinator.to_display_power(float(value))
 
     @property
     def available(self) -> bool:

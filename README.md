@@ -91,7 +91,7 @@ Works with:
 |---------|-------------|---------|
 | Integration name | Display name in HA | MDI Power Demand |
 | Power source | `combined` (Combine) or `split` (Split) | combined |
-| Input power unit | `auto`, `W`, or `kW` | auto |
+| Display unit | `W` (Watts) or `kW` (Kilowatts) — how MDI entities are shown | kW |
 | Monthly MDI reset day | Day of month the MDI peak resets (1–28) | 1 |
 | Capture reading day | Day to auto-snapshot MDI for billing (1–28) | 14 |
 | Capture reading time | Time for auto-snapshot | 18:00 |
@@ -145,7 +145,7 @@ All entities appear under device **MDI Power Demand**.
 | `sensor.export_monthly_mdi_at_reading` | EXPORT-MONTHLY-MDI-AT-READING | Frozen export MDI at last capture |
 | `button.capture_mdi_reading` | CAPTURE-MDI-READING | Press when meter reader arrives |
 
-All power sensors use unit **kW**.
+All MDI sensors use your configured **display unit** (Watts or Kilowatts). Source power is always converted from the entity’s own unit first.
 
 ### Which entity is which?
 

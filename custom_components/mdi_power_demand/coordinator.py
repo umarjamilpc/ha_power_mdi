@@ -1,0 +1,660 @@
+"""Coordinator for time-synced 30-minute MDI tracking."""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from datetime import datetime, time, timedelta
+from typing import Any
+
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.event import async_track_point_in_time, async_track_state_change_event
+from homeassistant.helpers.storage import Store
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util.dt import now as dt_now
+
+from .const import (
+    COMP_COMBINED,
+    COMP_EXPORT,
+    COMP_IMPORT,
+    CONF_AUTO_SNAPSHOT,
+    CONF_ENTITY_ID_BASE,
+    CONF_EXPORT_POWER_ENTITY,
+    CONF_IMPORT_POWER_ENTITY,
+    CONF_MODE,
+    CONF_NAME,
+    CONF_POWER_UNIT,
+    CONF_READING_DAY,
+    CONF_READING_TIME,
+    CONF_RESET_DAY,
+    CONF_SIGNED_POWER_ENTITY,
+    MODE_SIGNED,
+    MODE_SPLIT,
+    POWER_UNIT_AUTO,
+    POWER_UNIT_KW,
+    POWER_UNIT_W,
+    DOMAIN,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+WINDOW_SECONDS = 30 * 60
+
+
+def _safe_float(value: Any) -> float | None:
+    """Convert value to float if possible."""
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    # Avoid NaN propagation
+    if f != f:  # noqa: PLR0124 (NaN check)
+        return None
+    return f
+
+
+def _normalize_to_kw(power_value: float, unit: str, power_scaling_mode: str) -> float | None:
+    """Normalize a power reading to kW.
+
+    power_value is assumed to be in the unit described by unit/power_scaling_mode.
+    """
+    unit_clean = (unit or "").strip().lower()
+    if power_scaling_mode == POWER_UNIT_KW:
+        return power_value
+    if power_scaling_mode == POWER_UNIT_W:
+        return power_value / 1000.0
+    # AUTO
+    if unit_clean in {"kw", "kilowatt", "kilowatts"}:
+        return power_value
+    # Some sensors report "W" or "w"
+    if unit_clean in {"w", "watt", "watts"}:
+        return power_value / 1000.0
+    # Unknown unit: default to W behavior
+    return power_value / 1000.0
+
+
+@dataclass
+class MdiState:
+    cycle_id: str
+
+    # Last completed 30-minute averages (kW) for each component
+    last_completed_import_kw: float | None = None
+    last_completed_export_kw: float | None = None
+    last_completed_combined_kw: float | None = None
+
+    # Current cycle (month based on reset_day) maxima (kW)
+    mdi_import_max_kw: float = 0.0
+    mdi_export_max_kw: float = 0.0
+    mdi_combined_max_kw: float = 0.0
+
+    # Snapshot at meter reading (kW)
+    mdi_import_at_reading_kw: float | None = None
+    mdi_export_at_reading_kw: float | None = None
+    mdi_combined_at_reading_kw: float | None = None
+    mdi_at_reading_timestamp: datetime | None = None
+
+    # Block currently in progress (best-effort, kW)
+    current_block_start: datetime | None = None
+    current_block_end: datetime | None = None
+    current_import_block_avg_kw: float | None = None
+    current_export_block_avg_kw: float | None = None
+    current_combined_block_avg_kw: float | None = None
+
+    # Availability
+    source_ok: bool = False
+
+
+class MdiCoordinator(DataUpdateCoordinator[MdiState]):
+    """Track maximum 30-minute average (MDI) with :00/:30 synchronization."""
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self.entry = entry
+        self.config = {**entry.data, **entry.options}
+
+        self.hass = hass
+        self._reset_day: int = int(self.config[CONF_RESET_DAY])
+        self._reading_day: int = int(self.config[CONF_READING_DAY])
+        self._reading_time: time = self.config[CONF_READING_TIME]
+        self._auto_snapshot: bool = bool(self.config[CONF_AUTO_SNAPSHOT])
+
+        self._mode: str = self.config[CONF_MODE]
+        self._signed_power_entity: str | None = self.config.get(CONF_SIGNED_POWER_ENTITY)
+        self._import_power_entity: str | None = self.config.get(CONF_IMPORT_POWER_ENTITY)
+        self._export_power_entity: str | None = self.config.get(CONF_EXPORT_POWER_ENTITY)
+
+        self._power_unit_mode: str = self.config[CONF_POWER_UNIT]
+
+        self._entity_id_base: str = self.config.get(CONF_ENTITY_ID_BASE, "mdi")
+
+        # State accumulation for the active window
+        self._active_block_start: datetime | None = None
+        self._active_block_end: datetime | None = None
+        self._area_import_kw_seconds: float = 0.0
+        self._area_export_kw_seconds: float = 0.0
+        self._area_combined_kw_seconds: float = 0.0
+
+        self._last_sample_time: datetime | None = None
+        self._last_import_kw: float = 0.0
+        self._last_export_kw: float = 0.0
+        self._last_combined_kw: float = 0.0
+        self._block_valid: bool = False
+
+        # Listener unsubscribers
+        self._unsub_signed: Any = None
+        self._unsub_import: Any = None
+        self._unsub_export: Any = None
+
+        # Scheduled point-in-time unsubscribers
+        self._unsub_block_start: Any = None
+        self._unsub_block_end: Any = None
+        self._unsub_reading_snapshot: Any = None
+
+        # Storage
+        self._store = Store(
+            hass,
+            storage_version=1,
+            key=f"{DOMAIN}:{entry.entry_id}",
+        )
+
+        # Initialize coordinator with placeholder state
+        current_cycle_id = self._compute_cycle_id(dt_now(hass))
+        super().__init__(hass, _LOGGER, name=f"MDI Coordinator ({self._entity_id_base})", update_interval=None)
+        self.data = MdiState(cycle_id=current_cycle_id)
+
+    async def async_initialize(self) -> None:
+        """Initialize coordinator, load state, subscribe, and schedule windows."""
+        stored = await self._store.async_load()
+        current_cycle_id = self._compute_cycle_id(dt_now(self.hass))
+
+        if stored and stored.get("cycle_id") == current_cycle_id:
+            self.data = MdiState(
+                cycle_id=current_cycle_id,
+                last_completed_import_kw=stored.get("last_completed_import_kw"),
+                last_completed_export_kw=stored.get("last_completed_export_kw"),
+                last_completed_combined_kw=stored.get("last_completed_combined_kw"),
+                mdi_import_max_kw=float(stored.get("mdi_import_max_kw", 0.0)),
+                mdi_export_max_kw=float(stored.get("mdi_export_max_kw", 0.0)),
+                mdi_combined_max_kw=float(stored.get("mdi_combined_max_kw", 0.0)),
+                mdi_import_at_reading_kw=stored.get("mdi_import_at_reading_kw"),
+                mdi_export_at_reading_kw=stored.get("mdi_export_at_reading_kw"),
+                mdi_combined_at_reading_kw=stored.get("mdi_combined_at_reading_kw"),
+                mdi_at_reading_timestamp=self._parse_datetime(stored.get("mdi_at_reading_timestamp")),
+                current_block_start=None,
+                current_block_end=None,
+                current_import_block_avg_kw=None,
+                current_export_block_avg_kw=None,
+                current_combined_block_avg_kw=None,
+                source_ok=False,
+            )
+        else:
+            # New cycle or first install: start fresh
+            self.data = MdiState(cycle_id=current_cycle_id)
+            await self._async_save_storage()
+
+        self._subscribe_sources()
+        await self._schedule_next_block()
+        await self._maybe_schedule_or_take_snapshot(initial=True)
+
+        # Ensure entities get an initial update
+        self.async_set_updated_data(self.data)
+
+    async def async_shutdown(self) -> None:
+        """Stop listeners and scheduled callbacks."""
+        if self._unsub_signed:
+            self._unsub_signed()
+            self._unsub_signed = None
+        if self._unsub_import:
+            self._unsub_import()
+            self._unsub_import = None
+        if self._unsub_export:
+            self._unsub_export()
+            self._unsub_export = None
+        if self._unsub_block_start:
+            self._unsub_block_start()
+            self._unsub_block_start = None
+        if self._unsub_block_end:
+            self._unsub_block_end()
+            self._unsub_block_end = None
+        if self._unsub_reading_snapshot:
+            self._unsub_reading_snapshot()
+            self._unsub_reading_snapshot = None
+
+    async def async_handle_update(self, entry: ConfigEntry) -> None:
+        """Reconfigure the coordinator when options change."""
+        # Stop existing listeners/timers first
+        await self.async_shutdown()
+
+        # Refresh entry/config
+        self.entry = entry
+        self.config = {**entry.data, **entry.options}
+
+        # Reset timing/source settings
+        self._reset_day = int(self.config[CONF_RESET_DAY])
+        self._reading_day = int(self.config[CONF_READING_DAY])
+        self._reading_time = self.config[CONF_READING_TIME]
+        self._auto_snapshot = bool(self.config[CONF_AUTO_SNAPSHOT])
+
+        self._mode = self.config[CONF_MODE]
+        self._signed_power_entity = self.config.get(CONF_SIGNED_POWER_ENTITY)
+        self._import_power_entity = self.config.get(CONF_IMPORT_POWER_ENTITY)
+        self._export_power_entity = self.config.get(CONF_EXPORT_POWER_ENTITY)
+
+        self._power_unit_mode = self.config[CONF_POWER_UNIT]
+
+        self._entity_id_base = self.config.get(CONF_ENTITY_ID_BASE, "mdi")
+
+        # Reset runtime state + maxima to avoid mixing sources
+        self._active_block_start = None
+        self._active_block_end = None
+        self._area_import_kw_seconds = 0.0
+        self._area_export_kw_seconds = 0.0
+        self._area_combined_kw_seconds = 0.0
+        self._last_sample_time = None
+        self._last_import_kw = 0.0
+        self._last_export_kw = 0.0
+        self._last_combined_kw = 0.0
+        self._block_valid = False
+
+        current_cycle_id = self._compute_cycle_id(dt_now(self.hass))
+        self.data = MdiState(cycle_id=current_cycle_id)
+
+        await self._async_save_storage()
+
+        # Resubscribe and restart timers
+        self._subscribe_sources()
+        await self._schedule_next_block()
+        await self._maybe_schedule_or_take_snapshot(initial=False)
+        self.async_set_updated_data(self.data)
+
+    def _subscribe_sources(self) -> None:
+        """Subscribe to configured power sensor(s)."""
+        if self._mode == MODE_SIGNED:
+            if not self._signed_power_entity:
+                raise ValueError("Signed mode requires signed_power_entity")
+            self._unsub_signed = async_track_state_change_event(
+                self.hass, [self._signed_power_entity], self._handle_power_change
+            )
+        elif self._mode == MODE_SPLIT:
+            if not self._import_power_entity or not self._export_power_entity:
+                raise ValueError("Split mode requires import_power_entity and export_power_entity")
+            self._unsub_import = async_track_state_change_event(
+                self.hass, [self._import_power_entity], self._handle_power_change
+            )
+            self._unsub_export = async_track_state_change_event(
+                self.hass, [self._export_power_entity], self._handle_power_change
+            )
+        else:
+            raise ValueError(f"Unknown mode: {self._mode}")
+
+    def _compute_cycle_id(self, local_dt: datetime) -> str:
+        """Compute cycle id based on reset_day (defaults to day 1)."""
+        # If we're before reset_day, cycle started last month.
+        if local_dt.day < self._reset_day:
+            year = local_dt.year
+            month = local_dt.month - 1
+            if month == 0:
+                month = 12
+                year -= 1
+        else:
+            year = local_dt.year
+            month = local_dt.month
+        return f"{year:04d}-{month:02d}"
+
+    def _cycle_start_datetime(self, local_dt: datetime) -> datetime:
+        """Return timezone-aware datetime at cycle start (reset_day 00:00)."""
+        if local_dt.day < self._reset_day:
+            year = local_dt.year
+            month = local_dt.month - 1
+            if month == 0:
+                month = 12
+                year -= 1
+        else:
+            year = local_dt.year
+            month = local_dt.month
+        return datetime(
+            year=year,
+            month=month,
+            day=self._reset_day,
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+            tzinfo=local_dt.tzinfo,
+        )
+
+    def _reading_datetime_for_cycle(self, cycle_start_dt: datetime) -> datetime:
+        """Compute auto snapshot datetime for the cycle."""
+        # cycle_dt is any datetime inside the cycle; we use its year/month.
+        reading = datetime(
+            year=cycle_start_dt.year,
+            month=cycle_start_dt.month,
+            day=self._reading_day,
+            hour=self._reading_time.hour,
+            minute=self._reading_time.minute,
+            second=self._reading_time.second,
+            microsecond=0,
+            tzinfo=cycle_start_dt.tzinfo,
+        )
+        return reading
+
+    def _next_window_start(self, local_dt: datetime) -> datetime:
+        """Get the next :00/:30 boundary start."""
+        minute_slot = 0 if local_dt.minute < 30 else 30
+        slot_start = local_dt.replace(minute=minute_slot, second=0, microsecond=0)
+        if local_dt == slot_start:
+            return slot_start
+        return slot_start + timedelta(minutes=30)
+
+    async def _schedule_next_block(self) -> None:
+        """Schedule the next window start (aligned to :00/:30)."""
+        local_now = dt_now(self.hass)
+        next_start = self._next_window_start(local_now)
+
+        # Cancel any existing window callbacks (shouldn't happen often)
+        if self._unsub_block_start:
+            self._unsub_block_start()
+        if self._unsub_block_end:
+            self._unsub_block_end()
+
+        self._unsub_block_start = async_track_point_in_time(
+            self.hass,
+            self._handle_block_start,
+            next_start,
+        )
+        self._unsub_block_end = async_track_point_in_time(
+            self.hass,
+            self._handle_block_end,
+            next_start + timedelta(seconds=WINDOW_SECONDS),
+        )
+
+    async def _handle_block_start(self, run_at: datetime) -> None:
+        """Start a new 30-minute window exactly on boundary."""
+        # Ensure cycle is correct at the moment we begin.
+        local_now = dt_now(self.hass)
+        new_cycle_id = self._compute_cycle_id(local_now)
+        if new_cycle_id != self.data.cycle_id:
+            self.data = MdiState(cycle_id=new_cycle_id)
+            await self._async_save_storage()
+            await self._maybe_schedule_or_take_snapshot(initial=False)
+
+        self._active_block_start = run_at
+        self._active_block_end = run_at + timedelta(seconds=WINDOW_SECONDS)
+
+        self._area_import_kw_seconds = 0.0
+        self._area_export_kw_seconds = 0.0
+        self._area_combined_kw_seconds = 0.0
+
+        # Initialize last sample exactly at boundary start
+        import_kw, export_kw, combined_kw, source_ok = self._get_current_components_kw()
+        self._last_import_kw = import_kw or 0.0
+        self._last_export_kw = export_kw or 0.0
+        self._last_combined_kw = combined_kw or 0.0
+
+        self._last_sample_time = run_at
+        self._block_valid = bool(source_ok)
+
+        self.data.current_block_start = self._active_block_start
+        self.data.current_block_end = self._active_block_end
+        self.data.current_import_block_avg_kw = None
+        self.data.current_export_block_avg_kw = None
+        self.data.current_combined_block_avg_kw = None
+        self.data.source_ok = source_ok
+        self.async_set_updated_data(self.data)
+
+    async def _handle_block_end(self, run_at: datetime) -> None:
+        """Finalize the active window and update monthly maxima."""
+        if not self._active_block_start or not self._last_sample_time:
+            return
+
+        # Update cycle id at window end in case reset boundary is between.
+        local_now = dt_now(self.hass)
+        new_cycle_id = self._compute_cycle_id(local_now)
+        if new_cycle_id != self.data.cycle_id:
+            self.data = MdiState(cycle_id=new_cycle_id)
+            await self._async_save_storage()
+            await self._maybe_schedule_or_take_snapshot(initial=False)
+
+        # Add area until exact window end if valid
+        if self._block_valid:
+            elapsed = (run_at - self._last_sample_time).total_seconds()
+            if elapsed > 0:
+                self._area_import_kw_seconds += self._last_import_kw * elapsed
+                self._area_export_kw_seconds += self._last_export_kw * elapsed
+                self._area_combined_kw_seconds += self._last_combined_kw * elapsed
+
+            avg_import = self._area_import_kw_seconds / WINDOW_SECONDS
+            avg_export = self._area_export_kw_seconds / WINDOW_SECONDS
+            avg_combined = self._area_combined_kw_seconds / WINDOW_SECONDS
+        else:
+            avg_import = None
+            avg_export = None
+            avg_combined = None
+
+        # Update last completed block sensors
+        self.data.last_completed_import_kw = avg_import
+        self.data.last_completed_export_kw = avg_export
+        self.data.last_completed_combined_kw = avg_combined
+
+        # Update monthly maxima
+        changed = False
+        if avg_import is not None and avg_import > self.data.mdi_import_max_kw:
+            self.data.mdi_import_max_kw = avg_import
+            changed = True
+        if avg_export is not None and avg_export > self.data.mdi_export_max_kw:
+            self.data.mdi_export_max_kw = avg_export
+            changed = True
+        if avg_combined is not None and avg_combined > self.data.mdi_combined_max_kw:
+            self.data.mdi_combined_max_kw = avg_combined
+            changed = True
+
+        # Update current block averages (end of block)
+        self.data.current_block_start = None
+        self.data.current_block_end = None
+        self.data.current_import_block_avg_kw = None
+        self.data.current_export_block_avg_kw = None
+        self.data.current_combined_block_avg_kw = None
+        self.data.source_ok = self.data.source_ok
+
+        # Persist if a new max peak was hit
+        if changed:
+            await self._async_save_storage()
+
+        self.async_set_updated_data(self.data)
+
+        # Schedule the next window pair (start/end chain)
+        next_start = run_at
+        # The current start/end callbacks are already firing (or have fired),
+        # so we avoid calling their unsubscribe handlers here.
+        self._unsub_block_start = None
+        self._unsub_block_end = None
+
+        self._unsub_block_start = async_track_point_in_time(
+            self.hass,
+            self._handle_block_start,
+            next_start,
+        )
+        self._unsub_block_end = async_track_point_in_time(
+            self.hass,
+            self._handle_block_end,
+            next_start + timedelta(seconds=WINDOW_SECONDS),
+        )
+
+    def _get_current_components_kw(self) -> tuple[float | None, float | None, float | None, bool]:
+        """Read current sensor values and compute import/export/combined in kW."""
+        if self._mode == MODE_SIGNED:
+            entity_id = self._signed_power_entity
+            if not entity_id:
+                return None, None, None, False
+            state = self.hass.states.get(entity_id)
+            if state is None:
+                return None, None, None, False
+            raw = _safe_float(state.state)
+            if raw is None:
+                return None, None, None, False
+            unit = state.attributes.get("unit_of_measurement")  # type: ignore[assignment]
+            kw = _normalize_to_kw(raw, unit=str(unit or ""), power_scaling_mode=self._power_unit_mode)
+            if kw is None:
+                return None, None, None, False
+            import_kw = kw if kw > 0 else 0.0
+            export_kw = (-kw) if kw < 0 else 0.0
+            combined_kw = import_kw + export_kw
+            return import_kw, export_kw, combined_kw, True
+
+        # Split mode: import/export sensors represent magnitudes (typically >= 0)
+        import_entity = self._import_power_entity
+        export_entity = self._export_power_entity
+        if not import_entity or not export_entity:
+            return None, None, None, False
+
+        s_in = self.hass.states.get(import_entity)
+        s_out = self.hass.states.get(export_entity)
+        if s_in is None or s_out is None:
+            return None, None, None, False
+        raw_in = _safe_float(s_in.state)
+        raw_out = _safe_float(s_out.state)
+        if raw_in is None or raw_out is None:
+            return None, None, None, False
+
+        unit_in = s_in.attributes.get("unit_of_measurement")  # type: ignore[assignment]
+        unit_out = s_out.attributes.get("unit_of_measurement")  # type: ignore[assignment]
+
+        kw_in = _normalize_to_kw(raw_in, unit=str(unit_in or ""), power_scaling_mode=self._power_unit_mode)
+        kw_out = _normalize_to_kw(raw_out, unit=str(unit_out or ""), power_scaling_mode=self._power_unit_mode)
+        if kw_in is None or kw_out is None:
+            return None, None, None, False
+
+        import_kw = kw_in if kw_in > 0 else 0.0
+        export_kw = kw_out if kw_out > 0 else 0.0
+        combined_kw = import_kw + export_kw
+        return import_kw, export_kw, combined_kw, True
+
+    async def _handle_power_change(self, event) -> None:
+        """Handle any power sensor update while a window is active."""
+        if not self._active_block_start or not self._last_sample_time:
+            # Not in an active window yet: only mark source_ok if possible.
+            _, _, _, source_ok = self._get_current_components_kw()
+            self.data.source_ok = source_ok
+            return
+
+        run_at = dt_now(self.hass)
+
+        # If block already ended (time drift), ignore.
+        if self._active_block_end and run_at > self._active_block_end:
+            return
+
+        import_kw, export_kw, combined_kw, source_ok = self._get_current_components_kw()
+        # If sensors go invalid mid-block, we mark block invalid and stop MDI updates.
+        if not source_ok:
+            self._block_valid = False
+            self.data.source_ok = False
+            # Do not accumulate area; just update time so we don't use stale duration later
+            self._last_sample_time = run_at
+            return
+
+        # Accumulate using previous last values when the block is still valid.
+        if self._block_valid:
+            elapsed = (run_at - self._last_sample_time).total_seconds()
+            if elapsed > 0:
+                self._area_import_kw_seconds += self._last_import_kw * elapsed
+                self._area_export_kw_seconds += self._last_export_kw * elapsed
+                self._area_combined_kw_seconds += self._last_combined_kw * elapsed
+
+        # Update last sample values and time
+        self._last_sample_time = run_at
+        self._last_import_kw = float(import_kw or 0.0)
+        self._last_export_kw = float(export_kw or 0.0)
+        self._last_combined_kw = float(combined_kw or 0.0)
+        self.data.source_ok = True
+
+        # Compute best-effort current block average
+        if self._active_block_start:
+            total_elapsed = (run_at - self._active_block_start).total_seconds()
+            if total_elapsed > 0 and self._block_valid:
+                self.data.current_import_block_avg_kw = self._area_import_kw_seconds / total_elapsed
+                self.data.current_export_block_avg_kw = self._area_export_kw_seconds / total_elapsed
+                self.data.current_combined_block_avg_kw = self._area_combined_kw_seconds / total_elapsed
+            else:
+                self.data.current_import_block_avg_kw = None
+                self.data.current_export_block_avg_kw = None
+                self.data.current_combined_block_avg_kw = None
+
+        self.async_set_updated_data(self.data)
+
+    async def async_snapshot_now(self, reason: str) -> None:
+        """Capture MDI values at the configured meter reading moment."""
+        if not self.data:
+            return
+
+        # Only capture once per cycle for safety unless manual is pressed.
+        if self.data.mdi_at_reading_timestamp is not None:
+            # If user presses manual later in same cycle, allow update.
+            if reason != "manual":
+                return
+
+        self.data.mdi_import_at_reading_kw = float(self.data.mdi_import_max_kw)
+        self.data.mdi_export_at_reading_kw = float(self.data.mdi_export_max_kw)
+        self.data.mdi_combined_at_reading_kw = float(self.data.mdi_combined_max_kw)
+        self.data.mdi_at_reading_timestamp = dt_now(self.hass)
+
+        await self._async_save_storage()
+        self.async_set_updated_data(self.data)
+
+    async def _maybe_schedule_or_take_snapshot(self, initial: bool) -> None:
+        """Schedule auto snapshot for the current cycle, or take it immediately."""
+        # Cancel old schedule
+        if self._unsub_reading_snapshot:
+            self._unsub_reading_snapshot()
+            self._unsub_reading_snapshot = None
+
+        if not self._auto_snapshot:
+            return
+
+        current_local = dt_now(self.hass)
+        cycle_start = self._cycle_start_datetime(current_local)
+        reading_dt = self._reading_datetime_for_cycle(cycle_start)
+
+        if current_local > reading_dt and self.data.mdi_at_reading_timestamp is None:
+            await self.async_snapshot_now(reason="auto_late_start")
+            return
+
+        # Schedule only if it hasn't happened yet
+        if current_local <= reading_dt:
+            async def _auto_cb(_now_dt: datetime) -> None:
+                await self.async_snapshot_now(reason="auto")
+
+            self._unsub_reading_snapshot = async_track_point_in_time(
+                self.hass,
+                _auto_cb,
+                reading_dt,
+            )
+
+    async def _async_save_storage(self) -> None:
+        """Persist important values across HA restarts."""
+        payload: dict[str, Any] = {
+            "cycle_id": self.data.cycle_id,
+            "last_completed_import_kw": self.data.last_completed_import_kw,
+            "last_completed_export_kw": self.data.last_completed_export_kw,
+            "last_completed_combined_kw": self.data.last_completed_combined_kw,
+            "mdi_import_max_kw": self.data.mdi_import_max_kw,
+            "mdi_export_max_kw": self.data.mdi_export_max_kw,
+            "mdi_combined_max_kw": self.data.mdi_combined_max_kw,
+            "mdi_import_at_reading_kw": self.data.mdi_import_at_reading_kw,
+            "mdi_export_at_reading_kw": self.data.mdi_export_at_reading_kw,
+            "mdi_combined_at_reading_kw": self.data.mdi_combined_at_reading_kw,
+            "mdi_at_reading_timestamp": self.data.mdi_at_reading_timestamp.isoformat() if self.data.mdi_at_reading_timestamp else None,
+        }
+        await self._store.async_save(payload)
+
+    def _parse_datetime(self, value: Any) -> datetime | None:
+        if value is None:
+            return None
+        try:
+            # Python 3.11+ can parse ISO directly
+            dt = datetime.fromisoformat(value)
+            return dt
+        except (TypeError, ValueError):
+            return None
+

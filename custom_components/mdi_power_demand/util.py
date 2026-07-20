@@ -5,7 +5,24 @@ from __future__ import annotations
 from datetime import time as dt_time
 from typing import Any
 
-from .const import CONF_READING_TIME
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.helpers.device_registry import DeviceInfo
+
+from .const import CONF_READING_TIME, DOMAIN
+
+MANIFEST_VERSION = "0.1.6"
+
+
+def device_info(entry: ConfigEntry) -> DeviceInfo:
+    """Return shared device info for MDI entities."""
+    return DeviceInfo(
+        identifiers={(DOMAIN, entry.entry_id)},
+        name=entry.title or "MDI Power Demand",
+        manufacturer="MDI Power Demand",
+        model="Maximum Demand Indicator",
+        sw_version=MANIFEST_VERSION,
+        configuration_url="https://github.com/umarjamilpc/ha_power_mdi",
+    )
 
 
 def parse_time(value: Any) -> dt_time:

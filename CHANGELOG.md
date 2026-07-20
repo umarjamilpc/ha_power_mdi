@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2026-07-20
+
+### Changed
+
+- Removed Combined 30-min / Combined MDI sensors
+- Short uppercase entity names (IMPORT-MDI, EXPORT-MONTHLY-MDI, etc.)
+- Entity IDs now match names (`sensor.import_mdi`, `button.capture_mdi_reading`, …)
+- Entities are grouped under a single MDI Power Demand device
+
 ## [0.1.5] - 2026-07-20
 
 ### Fixed
@@ -56,6 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Full post-install reconfiguration via Options
 - Persistent MDI storage across Home Assistant restarts
 
+[0.1.6]: https://github.com/umarjamilpc/ha_power_mdi/releases/tag/v0.1.6
 [0.1.5]: https://github.com/umarjamilpc/ha_power_mdi/releases/tag/v0.1.5
 [0.1.4]: https://github.com/umarjamilpc/ha_power_mdi/releases/tag/v0.1.4
 [0.1.3]: https://github.com/umarjamilpc/ha_power_mdi/releases/tag/v0.1.3

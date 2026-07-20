@@ -44,6 +44,20 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 WINDOW_SECONDS = 30 * 60
+WINDOW_HOURS = WINDOW_SECONDS / 3600.0
+
+
+def _power_to_energy_kwh(power_kw: float, elapsed_seconds: float) -> float:
+    """Convert constant power over elapsed time to energy in kWh."""
+    return power_kw * elapsed_seconds / 3600.0
+
+
+def _interval_demand_kw(energy_kwh: float, interval_seconds: float) -> float:
+    """Utility interval demand: kW = kWh / interval_hours."""
+    interval_hours = interval_seconds / 3600.0
+    if interval_hours <= 0:
+        return 0.0
+    return energy_kwh / interval_hours
 
 
 def _safe_float(value: Any) -> float | None:
@@ -112,7 +126,7 @@ class MdiState:
 
 
 class MdiCoordinator(DataUpdateCoordinator[MdiState]):
-    """Track maximum 30-minute average (MDI) with :00/:30 synchronization."""
+    """Track MDI using utility interval demand: kW = kWh / hours."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.entry = entry
@@ -124,9 +138,9 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         # State accumulation for the active window
         self._active_block_start: datetime | None = None
         self._active_block_end: datetime | None = None
-        self._area_import_kw_seconds: float = 0.0
-        self._area_export_kw_seconds: float = 0.0
-        self._area_combined_kw_seconds: float = 0.0
+        self._energy_import_kwh: float = 0.0
+        self._energy_export_kwh: float = 0.0
+        self._energy_combined_kwh: float = 0.0
 
         self._last_sample_time: datetime | None = None
         self._last_import_kw: float = 0.0
@@ -229,9 +243,9 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
 
         self._active_block_start = None
         self._active_block_end = None
-        self._area_import_kw_seconds = 0.0
-        self._area_export_kw_seconds = 0.0
-        self._area_combined_kw_seconds = 0.0
+        self._energy_import_kwh = 0.0
+        self._energy_export_kwh = 0.0
+        self._energy_combined_kwh = 0.0
         self._last_sample_time = None
         self._last_import_kw = 0.0
         self._last_export_kw = 0.0
@@ -346,9 +360,9 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         self._active_block_start = run_at
         self._active_block_end = run_at + timedelta(seconds=WINDOW_SECONDS)
 
-        self._area_import_kw_seconds = 0.0
-        self._area_export_kw_seconds = 0.0
-        self._area_combined_kw_seconds = 0.0
+        self._energy_import_kwh = 0.0
+        self._energy_export_kwh = 0.0
+        self._energy_combined_kwh = 0.0
         self._last_sample_time = None
 
         # First fixed-interval sample at the block boundary (utility-style).
@@ -377,9 +391,9 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         if self._block_valid:
             self._accumulate_since_last_sample(run_at)
 
-            avg_import = self._area_import_kw_seconds / WINDOW_SECONDS
-            avg_export = self._area_export_kw_seconds / WINDOW_SECONDS
-            avg_combined = self._area_combined_kw_seconds / WINDOW_SECONDS
+            avg_import = _interval_demand_kw(self._energy_import_kwh, WINDOW_SECONDS)
+            avg_export = _interval_demand_kw(self._energy_export_kwh, WINDOW_SECONDS)
+            avg_combined = _interval_demand_kw(self._energy_combined_kwh, WINDOW_SECONDS)
         else:
             avg_import = None
             avg_export = None
@@ -484,15 +498,15 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         return import_kw, export_kw, combined_kw, True
 
     def _accumulate_since_last_sample(self, run_at: datetime) -> None:
-        """Add time-weighted energy for the interval ending at run_at."""
+        """Add interval energy (kWh) since the previous sample."""
         if not self._block_valid or not self._last_sample_time:
             return
         elapsed = (run_at - self._last_sample_time).total_seconds()
         if elapsed <= 0:
             return
-        self._area_import_kw_seconds += self._last_import_kw * elapsed
-        self._area_export_kw_seconds += self._last_export_kw * elapsed
-        self._area_combined_kw_seconds += self._last_combined_kw * elapsed
+        self._energy_import_kwh += _power_to_energy_kwh(self._last_import_kw, elapsed)
+        self._energy_export_kwh += _power_to_energy_kwh(self._last_export_kw, elapsed)
+        self._energy_combined_kwh += _power_to_energy_kwh(self._last_combined_kw, elapsed)
 
     def _update_current_block_averages(self, run_at: datetime) -> None:
         """Update in-progress block averages after a sample."""
@@ -504,9 +518,15 @@ class MdiCoordinator(DataUpdateCoordinator[MdiState]):
         total_elapsed = (run_at - self._active_block_start).total_seconds()
         if total_elapsed <= 0:
             return
-        self.data.current_import_block_avg_kw = self._area_import_kw_seconds / total_elapsed
-        self.data.current_export_block_avg_kw = self._area_export_kw_seconds / total_elapsed
-        self.data.current_combined_block_avg_kw = self._area_combined_kw_seconds / total_elapsed
+        self.data.current_import_block_avg_kw = _interval_demand_kw(
+            self._energy_import_kwh, total_elapsed
+        )
+        self.data.current_export_block_avg_kw = _interval_demand_kw(
+            self._energy_export_kwh, total_elapsed
+        )
+        self.data.current_combined_block_avg_kw = _interval_demand_kw(
+            self._energy_combined_kwh, total_elapsed
+        )
 
     async def _take_sample(self, run_at: datetime) -> bool:
         """Read power at a fixed sampling instant and accumulate since the prior sample."""

@@ -51,6 +51,24 @@ Works with:
 | Capture reading day | Day meter is read | 14 |
 | Capture reading time | Auto snapshot time | 18:00 |
 | Auto snapshot | Enable scheduled capture | Off |
+| Power sampling interval | Minutes between power samples inside each 30-min block | 1 |
+
+## How interval demand is calculated
+
+This matches the utility meter formula:
+
+**Interval Demand (kW) = Energy used in interval (kWh) ÷ Interval time (hours)**
+
+For each 30-minute block (`:00` → `:30` or `:30` → `:00`):
+
+1. Read instantaneous power at your configured sampling interval (default **1 minute**)
+2. Convert each sub-interval to energy: `kWh = kW × minutes / 60`
+3. Sum energy over the full 30 minutes
+4. **Demand = total kWh ÷ 0.5 hours** (30 min = 0.5 h)
+
+Example: if you use **0.383 kWh** import in 30 minutes → demand = **0.383 ÷ 0.5 = 0.766 kW**.
+
+Set **sampling interval = 1 minute** to match typical utility CT meters and your Refoss ~60s updates.
 
 ### Signed mode
 

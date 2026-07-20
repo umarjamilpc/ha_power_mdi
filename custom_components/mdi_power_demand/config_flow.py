@@ -50,6 +50,18 @@ def _reading_time_default(defaults: dict[str, Any]) -> str:
     return parse_time(reading_time_default).strftime("%H:%M:%S")
 
 
+def _block_duration_default(defaults: dict[str, Any]) -> str:
+    """Return a string default suitable for the block-duration SelectSelector."""
+    value = defaults.get(CONF_BLOCK_DURATION_MINUTES, DEFAULT_BLOCK_DURATION_MINUTES)
+    try:
+        duration = int(value)
+    except (TypeError, ValueError):
+        duration = DEFAULT_BLOCK_DURATION_MINUTES
+    if duration not in (15, 30, 60):
+        duration = DEFAULT_BLOCK_DURATION_MINUTES
+    return str(duration)
+
+
 def _general_settings_schema(defaults: dict[str, Any]) -> vol.Schema:
     """Build the shared general settings schema using HA selectors."""
     return vol.Schema(
@@ -102,9 +114,7 @@ def _general_settings_schema(defaults: dict[str, Any]) -> vol.Schema:
             ): selector.BooleanSelector(),
             vol.Required(
                 CONF_BLOCK_DURATION_MINUTES,
-                default=int(
-                    defaults.get(CONF_BLOCK_DURATION_MINUTES, DEFAULT_BLOCK_DURATION_MINUTES)
-                ),
+                default=_block_duration_default(defaults),
             ): selector.SelectSelector(
                 selector.SelectSelectorConfig(
                     options=["15", "30", "60"],
